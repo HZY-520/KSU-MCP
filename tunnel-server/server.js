@@ -1,16 +1,21 @@
 #!/usr/bin/env node
 /**
- * KSU MCP Tunnel Server v1.1.0
+ * KSU MCP Tunnel Server v1.2.0
  * 内网穿透服务端：设备（模块端 mcpd tunnel）主动连接本服务，远端 MCP 客户端
  * 通过 https://<域名>/mcp/<device> 访问设备上的 MCP 服务。
  *
- * v1.1.0 变更：
- *  - 流式转发协议（hello 握手 + response(fin) + chunk 分片）：
- *    Streamable HTTP GET 长流 / 大响应（截屏等）经隧道实时传输，公网不掉线；
- *  - 设备断线快速失败：500ms 内使该设备所有在途请求返回 502，不再干等超时；
- *  - 响应竞态修复：超时 / 设备响应 / 断线 三方互斥收口，杜绝 headers already sent 崩溃；
- *  - WebUI 添加设备支持自定义 tunnelToken / clientToken；
- *  - 新增 POST /api/devices/<id>/kick 踢下线接口。
+ * v1.2.0 变更：
+ *  - 心跳 30s → 10s，连续 3 次未收到 pong（≈35s）即判定连接死亡并回收，
+ *    与设备端 10s 心跳 / 35s 读超时严格对齐（旧版最坏 60s 才回收死连接）；
+ *  - 新增设备级连接质量指标：重连次数、心跳 RTT、收发字节、转发请求/失败数、
+ *    在线累计时长、最近活跃时间，并在 /api/status 与 /api/metrics 暴露；
+ *  - 设备断线时记录 lastError 以便 WebUI 展示。
+ *
+ * v1.1.0 已有能力（保持兼容）：
+ *  - 流式转发协议（hello 握手 + response(fin) + chunk 分片）；
+ *  - 设备断线快速失败（500ms 内使在途请求返回 502）；
+ *  - 响应竞态修复（超时 / 设备响应 / 断线三方互斥收口）；
+ *  - WebUI 添加设备支持自定义 tunnelToken / clientToken；踢下线 API。
  *
  * 运行：npm install && node server.js（或 pm2 start server.js --name ksu-mcp-tunnel）
  * 配置：config.json（见 config.example.json）；也可用环境变量 TUNNEL_CONFIG 指定路径
@@ -25,10 +30,15 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const APP_NAME = 'KSU MCP Tunnel Server';
 const MAX_PROXY_BODY = 16 * 1024 * 1024; // 代理请求体上限（与设备端一致）
 const TOKEN_RE = /^[A-Za-z0-9_.\-]{16,128}$/; // 自定义 Token 规则（留空则自动生成）
+
+// 心跳参数：与设备端 mcpd 的 10s 心跳 / 35s 判死保持一致
+const PING_INTERVAL = 10000;  // 每 10s 发一次 WS ping（带时间戳负载用于测 RTT）
+const MAX_MISSED_PONGS = 3;   // 连续 3 次未回 pong（≈35s）判定死亡
+
 
 // ---------------- 配置 ----------------
 const CONFIG_PATH = process.env.TUNNEL_CONFIG || path.join(__dirname, 'config.json');
@@ -88,6 +98,59 @@ function log(...a) {
   console.log(...a);
   logRing.push(line);
   if (logRing.length > MAX_LOG) logRing.shift();
+}
+
+// ---------------- 设备级质量指标（v1.2.0） ----------------
+// 这些指标跨「重连」累计，用于在管理台展示隧道连接质量（延迟 / 重连 / 流量 / 失败）。
+const deviceStats = new Map(); // deviceId -> metrics
+
+function devMetrics(device) {
+  let m = deviceStats.get(device);
+  if (!m) {
+    m = {
+      device,
+      online: false,
+      connectedAt: null,     // 本次连接建立时间
+      lastSeenAt: null,      // 最近收到设备任何帧 / pong 的时间
+      reconnects: 0,         // 累计重连次数（第 2 次起计）
+      rttMs: null,           // 最近一次心跳 RTT
+      rttMsAvg: null,        // 滑动平均 RTT
+      bytesIn: 0,            // 设备 -> 服务端（含分片回传）
+      bytesOut: 0,           // 服务端 -> 设备（含转发请求）
+      requests: 0,           // 转发到该设备的请求数
+      failures: 0,           // 转发失败数（超时 / 设备离线）
+      onlineMsTotal: 0,      // 累计在线时长
+      lastError: '',         // 最近一次断开原因
+      lastErrorAt: null,
+      serverVersion: null,   // 设备端上报的握手版本（hello 由服务端下发，此字段保留扩展）
+      missedPongs: 0,
+    };
+    deviceStats.set(device, m);
+  }
+  return m;
+}
+
+// metricsView 输出给 WebUI 的指标快照（补齐派生字段）
+function metricsView(device) {
+  const m = devMetrics(device);
+  const onlineMs = m.connectedAt ? Date.now() - m.connectedAt : 0;
+  return {
+    device,
+    online: m.online,
+    connectedAt: m.connectedAt,
+    lastSeenAt: m.lastSeenAt,
+    onlineMs: m.onlineMsTotal + onlineMs,
+    sessionMs: m.connectedAt ? onlineMs : 0,
+    reconnects: m.reconnects,
+    rttMs: m.rttMs,
+    rttMsAvg: m.rttMsAvg,
+    bytesIn: m.bytesIn,
+    bytesOut: m.bytesOut,
+    requests: m.requests,
+    failures: m.failures,
+    lastError: m.lastError || null,
+    lastErrorAt: m.lastErrorAt,
+  };
 }
 
 // ---------------- 在途请求管理（统一收口，杜绝重复响应） ----------------
@@ -162,15 +225,41 @@ wss.on('connection', (ws, req) => {
   if (old && old !== ws && old.readyState === 1) {
     try { old.close(4000, 'replaced'); } catch (e) { /* ignore */ }
   }
+  const m = devMetrics(device);
+  // 累计重连次数：本次连接时该设备已有过一次连接即计入
+  if (m.connectedAt !== null || m.reconnects > 0 || m.onlineMsTotal > 0) m.reconnects += 1;
+  m.online = true;
+  m.connectedAt = Date.now();
+  m.lastSeenAt = Date.now();
+  m.missedPongs = 0;
+  m.lastError = '';
+  m.lastErrorAt = null;
+
   ws.meta = { device, connectedAt: Date.now(), remote: req.socket.remoteAddress || '' };
   deviceSockets.set(device, ws);
   ws.isAlive = true;
-  ws.on('pong', () => { ws.isAlive = true; });
+  ws.missedPongs = 0;
+  ws.on('pong', (data) => {
+    ws.isAlive = true;
+    ws.missedPongs = 0;
+    m.lastSeenAt = Date.now();
+    // 心跳 RTT：服务端 ping 时把时间戳放进 payload，pong 原样带回
+    const sent = parseInt(String(data), 10);
+    if (!isNaN(sent) && sent > 0) {
+      const rtt = Date.now() - sent;
+      if (rtt >= 0 && rtt < 60000) {
+        m.rttMs = rtt;
+        m.rttMsAvg = m.rttMsAvg === null ? rtt : Math.round(m.rttMsAvg * 0.7 + rtt * 0.3);
+      }
+    }
+  });
 
   // 版本握手：告知设备端本服务支持流式转发协议（>=1.1.0）
   try { ws.send(JSON.stringify({ type: 'hello', version: VERSION })); } catch (e) { /* ignore */ }
 
   ws.on('message', (data) => {
+    m.bytesIn += data.length || 0;
+    m.lastSeenAt = Date.now();
     let msg;
     try { msg = JSON.parse(data.toString()); } catch (e) { return; }
     if (!msg || msg.id === undefined) return;
@@ -207,30 +296,46 @@ wss.on('connection', (ws, req) => {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code, reason) => {
     if (deviceSockets.get(device) === ws) deviceSockets.delete(device);
+    m.online = false;
+    if (m.connectedAt) { m.onlineMsTotal += Date.now() - m.connectedAt; m.connectedAt = null; }
+    const why = 'code=' + code + (reason && reason.length ? ' (' + reason.toString().slice(0, 80) + ')' : '');
+    m.lastError = why;
+    m.lastErrorAt = Date.now();
     // 断线快速失败：立即终结该设备所有在途请求
     for (const [, p] of pending) {
-      if (p.device === device) failPending(p, 502, 'device offline');
+      if (p.device === device) {
+        m.failures += 1;
+        failPending(p, 502, 'device offline');
+      }
     }
-    log('设备离线:', device);
+    log('设备离线:', device, why);
   });
-  ws.on('error', () => { /* ignore */ });
+  ws.on('error', (e) => {
+    m.lastError = String((e && e.message) || e).slice(0, 160);
+    m.lastErrorAt = Date.now();
+  });
   log('设备在线:', device, '(' + ws.meta.remote + ')');
 });
 
-// 心跳：清理死连接
+// 心跳：10s 一次 ping（带时间戳负载），连续 3 次未回 pong（≈35s）判定死亡并回收，
+// 期间在途请求由 close 事件快速失败，远端客户端不会悬挂等待。
 setInterval(() => {
   for (const [device, ws] of deviceSockets) {
-    if (!ws.isAlive) {
+    const m = devMetrics(device);
+    if (ws.missedPongs >= MAX_MISSED_PONGS) {
+      m.lastError = 'heartbeat timeout (' + MAX_MISSED_PONGS + ' missed pongs ≈' +
+        Math.round((PING_INTERVAL * MAX_MISSED_PONGS) / 1000) + 's)';
+      m.lastErrorAt = Date.now();
       log('心跳超时，断开设备:', device);
       try { ws.terminate(); } catch (e) { /* ignore */ }
       continue;
     }
-    ws.isAlive = false;
-    try { ws.ping(); } catch (e) { /* ignore */ }
+    ws.missedPongs = (ws.missedPongs || 0) + 1;
+    try { ws.ping(String(Date.now())); } catch (e) { /* ignore */ }
   }
-}, 30000).unref();
+}, PING_INTERVAL).unref();
 
 // ---------------- HTTP 服务 ----------------
 const useTLS = !!(CONFIG.tls && CONFIG.tls.cert && CONFIG.tls.key);
@@ -375,6 +480,7 @@ async function handleAPI(req, res, u) {
         remote: ws && ws.meta ? ws.meta.remote : null,
         tunnelToken: dev.tunnelToken,
         clientToken: dev.clientToken,
+        metrics: metricsView(d),
       };
     });
     respond(res, 200, {
@@ -389,9 +495,46 @@ async function handleAPI(req, res, u) {
         requests: stats.requests,
         failures: stats.failures,
         active: pending.size,
+        devices: devices.length,
+        devicesOnline: devices.filter((d) => d.online).length,
+      },
+      heartbeat: {
+        pingIntervalMs: PING_INTERVAL,
+        maxMissedPongs: MAX_MISSED_PONGS,
+        deadAfterMs: PING_INTERVAL * MAX_MISSED_PONGS,
       },
       adminUser: CONFIG.admin.username,
       devices,
+    });
+    return;
+  }
+
+  // 连接质量指标（专供管理台轮询，避免重复渲染设备 Token）
+  if (p === '/api/metrics' && req.method === 'GET') {
+    const rows = Object.keys(CONFIG.devices).map(metricsView);
+    const online = rows.filter((r) => r.online);
+    const rtts = online.map((r) => r.rttMs).filter((v) => typeof v === 'number');
+    respond(res, 200, {
+      ok: true,
+      version: VERSION,
+      uptime: Date.now() - stats.startedAt,
+      activeRequests: pending.size,
+      heartbeat: {
+        pingIntervalMs: PING_INTERVAL,
+        maxMissedPongs: MAX_MISSED_PONGS,
+        deadAfterMs: PING_INTERVAL * MAX_MISSED_PONGS,
+      },
+      aggregate: {
+        devices: rows.length,
+        online: online.length,
+        reconnects: rows.reduce((a, r) => a + r.reconnects, 0),
+        requests: rows.reduce((a, r) => a + r.requests, 0),
+        failures: rows.reduce((a, r) => a + r.failures, 0),
+        bytesIn: rows.reduce((a, r) => a + r.bytesIn, 0),
+        bytesOut: rows.reduce((a, r) => a + r.bytesOut, 0),
+        rttMsAvg: rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : null,
+      },
+      devices: rows,
     });
     return;
   }
@@ -539,11 +682,13 @@ server.on('request', (req, res) => {
     const ws = deviceSockets.get(device);
     if (!ws || ws.readyState !== 1) {
       stats.failures += 1;
+      devMetrics(device).failures += 1;
       respond(res, 502, errJSON(-32000, 'device offline'));
       return;
     }
 
     stats.requests += 1;
+    devMetrics(device).requests += 1;
     const chunks = [];
     let size = 0;
     let rejected = false;
@@ -553,6 +698,7 @@ server.on('request', (req, res) => {
       if (size > MAX_PROXY_BODY) {
         rejected = true;
         stats.failures += 1;
+        devMetrics(device).failures += 1;
         respond(res, 413, errJSON(-32000, 'request body too large'));
         return;
       }
@@ -574,11 +720,17 @@ server.on('request', (req, res) => {
       const p = { id, device, res, started: false, settled: false, timer: null };
       pending.set(id, p);
       armTimer(p);
+      const raw = JSON.stringify(msg);
+      devMetrics(device).bytesOut += Buffer.byteLength(raw);
       try {
-        ws.send(JSON.stringify(msg), (err) => {
-          if (err) failPending(p, 502, 'device send failed');
+        ws.send(raw, (err) => {
+          if (err) {
+            devMetrics(device).failures += 1;
+            failPending(p, 502, 'device send failed');
+          }
         });
       } catch (e) {
+        devMetrics(device).failures += 1;
         failPending(p, 502, 'device offline');
       }
     });

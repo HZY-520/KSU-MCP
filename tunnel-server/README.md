@@ -8,12 +8,14 @@
 远端 MCP 客户端 ──HTTPS──> n.huziyang.top（本服务） ──WebSocket──> 手机 mcpd tunnel ──> 手机本地 MCP Server
 ```
 
-## WebUI 管理台（v1.1.0 内置）
+## WebUI 管理台（v1.2.0）
 
 浏览器打开 **`https://n.huziyang.top/admin`**（本包默认账号 **admin / admin123**，**首次登录后请立即在「管理密码」处更换**）。
 新版管理台为卡片式 UI，**移动端自适应**，支持丝滑动画：
 
 - 运行统计：设备在线数、转发请求 / 失败数、当前转发中（数字滚动动画）
+- **连接质量指标（v1.2.0 新增）**：每个设备卡片展示 心跳延迟(RTT) / 重连次数 / 转发请求与失败数 /
+  收发流量 / 本次在线时长 / 累计在线时长 / 离线原因；`GET /api/metrics` 提供聚合视图
 - 设备管理：在线状态（IP、接入时间）、添加设备（**可自定义 tunnelToken / clientToken**，留空自动生成 48 位随机串）、
   一键复制端点与 Token（默认遮罩可点开）、重置单个/全部 Token、**踢下线**、删除设备
   （新增与重置 Token 会**自动写回 config.json 并立即生效**；重置 tunnelToken 后设备需用新 Token 重连）
@@ -22,14 +24,23 @@
 
 > 请务必通过 **HTTPS** 访问 /admin；Nginx 已反代整站，`/admin`、`/api/` 自动覆盖，无需额外配置。
 
-### v1.1.0 稳定性升级（建议与设备端模块同步升级）
+### v1.2.0 稳定性升级（务必与设备端模块同步升级）
+
+- **心跳 30s → 10s，判死 3 次丢包（≈35s）**：与设备端 10s 心跳 / 35s 读超时严格对齐；
+  v1.1.0 最坏需要 60s 才回收死连接，期间远端调用会悬挂。
+- **设备级质量指标**：重连次数、心跳 RTT（含滑动均值）、收发字节、转发请求/失败数、
+  在线累计时长、最近活跃时间、离线原因；`/api/status` 与新增的 `/api/metrics` 均暴露。
+- **离线原因留存**：设备断开时记录 `code/reason` 或 `heartbeat timeout (3 missed pongs ≈30s)`。
+
+### v1.1.0 已有能力（保持兼容）
 
 - **流式转发协议**：设备连接时服务端下发 `hello` 握手，≥ v1.1.0 设备按 64KB 分帧回传
   （Streamable HTTP GET 长流 / 大响应实时传输，公网不掉线）；旧设备自动降级单帧。
 - **断线快速失败**：设备离线瞬间终结其所有在途请求（502），不再干等 90s 超时。
 - **竞态修复**：超时 / 设备响应 / 断线三方互斥收口，杜绝 `headers already sent` 崩溃。
 - **自定义 Token**：`POST /api/devices` 支持 `tunnelToken` / `clientToken` 可选字段（16-128 位 `[A-Za-z0-9_.\-]`）。
-- **新增 API**：`POST /api/devices/<device>/kick` 踢下线（设备端会自动重连）。
+- **新增 API**：`POST /api/devices/<device>/kick` 踢下线（设备端会自动重连）；
+  v1.2.0 追加 `GET /api/metrics`（连接质量指标）。
 
 > 升级方式：上传本目录新文件覆盖旧目录（server.js / admin.html），`pm2 restart ksu-mcp-tunnel` 即完成；
 > config.json 无需改动，旧配置继续生效。
@@ -102,7 +113,10 @@ pm2 start server.js --name ksu-mcp-tunnel && pm2 save && pm2 startup
 | 设备名 | 与 config.json 的 devices 键一致（如 `my-phone`） |
 | Token | config.json 中该设备的 `tunnelToken` |
 
-保存并「连接」后，`mcpd tunnel-status` 显示 running 即成功。
+保存并「连接」后，`mcpd tunnel-status` 应显示 `"connected": true`（真实连接态），
+管理台设备卡片应变为「在线」并开始显示心跳延迟。
+
+> v1.2.0 起 WebUI 的 Token 输入框**不回显**已保存的 Token：留空即表示沿用已保存值，直接点「保存配置」不会清空 Token。
 
 ## 五、远端 MCP 客户端接入
 
@@ -113,12 +127,17 @@ pm2 start server.js --name ksu-mcp-tunnel && pm2 save && pm2 startup
 ## 六、运维
 
 ```bash
-pm2 logs ksu-mcp-tunnel        # 日志（设备上下线、转发错误）
+pm2 logs ksu-mcp-tunnel              # 日志（设备上下线、转发错误、心跳超时）
 curl https://n.huziyang.top/health   # 健康检查 → ok
+# 连接质量指标（需登录管理台后的 Cookie）
+curl -b "ksu_mcp_admin=<cookie>" https://n.huziyang.top/api/metrics
 ```
 
 ## 七、安全须知
 
 - 隧道把设备的 **root shell 能力**暴露到公网，Token 必须足够长且保管好；泄露后立即更换两个 Token 并重启服务。
-- 设备离线时远端请求返回 502；`requestTimeout` 默认 90 秒。
+- 设备离线时远端请求返回 502；`requestTimeout` 默认 90 秒（每次分片会重置该空闲计时）。
+- 单设备单连接：同设备新连接顶替旧连接（设备端会自动重连）。
+- 设备端只暴露 MCP 端点（`/mcp`、`/sse`、`/health`）；设备本地控制 API `/api/*` **不经隧道转发**，
+  因此本机 Token 不会通过公网泄露（含 `/mcp/../api/state` 等路径穿越写法）。
 - 服务端不解析 MCP 内容，只做字节级转发，会话（Mcp-Session-Id）由设备端维持。

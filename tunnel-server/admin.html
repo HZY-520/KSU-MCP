@@ -110,6 +110,12 @@ input::placeholder{color:var(--dim2)}
 .tok code{flex:1;min-width:0;font-size:11.5px;color:#b9c6e8;word-break:break-all;background:rgba(10,13,22,.85);
   border:1px solid var(--line);border-radius:8px;padding:5px 9px}
 .dev-ops{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+.dev-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(76px,1fr));gap:6px;margin-top:10px}
+.dev-metrics .m{background:rgba(10,13,22,.7);border:1px solid var(--line);border-radius:9px;padding:6px 8px}
+.dev-metrics .m b{display:block;font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dev-metrics .m span{font-size:10px;color:var(--dim)}
+.dev-err{margin-top:8px;font-size:11px;color:var(--warn);overflow-wrap:anywhere}
 
 /* ---------- 模态 ---------- */
 .overlay{position:fixed;inset:0;z-index:100;background:rgba(4,6,12,.6);backdrop-filter:blur(6px);
@@ -148,9 +154,9 @@ pre{background:rgba(7,9,15,.9);border:1px solid var(--line);border-radius:12px;p
 .sw input{opacity:0;width:0;height:0;position:absolute}
 .sw i{position:absolute;inset:0;border-radius:999px;background:rgba(255,255,255,.1);border:1px solid var(--line2);transition:.3s;cursor:pointer}
 .sw i::after{content:"";position:absolute;top:2.5px;left:3px;width:16px;height:16px;border-radius:50%;
-  background:#c6ccdd;transition:.3s cubic-bezier(.34,1.56,.64,1)}
+  background:#c6ccdd;transform:translateX(0);transition:transform .3s cubic-bezier(.34,1.4,.64,1),background .3s ease}
 .sw input:checked+i{background:linear-gradient(135deg,var(--acc),#7c5cf0);border-color:transparent}
-.sw input:checked+i::after{left:18px;background:#fff}
+.sw input:checked+i::after{transform:translateX(17px);background:#fff}
 .toast{position:fixed;left:50%;bottom:calc(30px + env(safe-area-inset-bottom));z-index:200;
   transform:translate(-50%,18px);opacity:0;pointer-events:none;transition:.3s cubic-bezier(.2,1,.4,1);
   background:rgba(30,35,55,.95);border:1px solid var(--line2);color:var(--txt);
@@ -244,7 +250,7 @@ footer{color:var(--dim2);font-size:11px;text-align:center;margin-top:22px}
       </div>
     </section>
 
-    <footer>KSU MCP Tunnel Server v1.1.0 · 流式转发 · 请通过 HTTPS 访问本管理台</footer>
+    <footer>KSU MCP Tunnel Server v1.2.0 · 10s 心跳 / 35s 判死 · 连接质量指标 · 请通过 HTTPS 访问本管理台</footer>
   </div>
 </div>
 
@@ -322,6 +328,14 @@ function mask(t) {
   if (t.length <= 12) return t.slice(0, 3) + '••••' + t.slice(-3);
   return t.slice(0, 6) + '••••••••' + t.slice(-4);
 }
+function fmtBytes(n) {
+  n = n || 0;
+  if (n < 1024) return n + 'B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + 'K';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + 'M';
+  return (n / 1073741824).toFixed(2) + 'G';
+}
+function fmtMs(v) { return (typeof v === 'number' && v >= 0) ? v + 'ms' : '-'; }
 function randHex24() {
   const a = new Uint8Array(24);
   crypto.getRandomValues(a);
@@ -338,19 +352,8 @@ function el(tag, cls, text) {
   return e;
 }
 
-// 按钮涟漪
-document.addEventListener('click', (e) => {
-  const b = e.target.closest('.btn');
-  if (!b) return;
-  const r = el('span', 'ripple');
-  const rect = b.getBoundingClientRect();
-  const d = Math.max(rect.width, rect.height);
-  r.style.width = r.style.height = d + 'px';
-  r.style.left = ((e.clientX || rect.left + rect.width / 2) - rect.left - d / 2) + 'px';
-  r.style.top = ((e.clientY || rect.top + rect.height / 2) - rect.top - d / 2) + 'px';
-  b.appendChild(r);
-  setTimeout(() => r.remove(), 600);
-});
+// 按钮按下反馈由 .btn:active 的 transform 承担（不再用 JS 涟漪，
+// 避免每次点击都 getBoundingClientRect 触发强制回流）
 
 async function copyText(text, msg) {
   let ok = false;
@@ -463,6 +466,26 @@ function devCard(d, i) {
   meta.appendChild(el('span', '', 'IP ' + (d.remote || '-')));
   meta.appendChild(el('span', '', '接入 ' + fmtTime(d.connectedAt)));
   card.appendChild(meta);
+
+  // 连接质量指标（v1.2.0：延迟 / 重连 / 请求 / 流量 / 在线时长）
+  const m = d.metrics || {};
+  const mrow = el('div', 'dev-metrics');
+  const mcell = (val, label) => {
+    const box = el('div', 'm');
+    box.appendChild(el('b', '', val));
+    box.appendChild(el('span', '', label));
+    return box;
+  };
+  mrow.appendChild(mcell(d.online ? fmtMs(m.rttMs) : '-', '心跳延迟'));
+  mrow.appendChild(mcell(String(m.reconnects || 0), '重连次数'));
+  mrow.appendChild(mcell((m.requests || 0) + '/' + (m.failures || 0), '请求/失败'));
+  mrow.appendChild(mcell(fmtBytes((m.bytesIn || 0) + (m.bytesOut || 0)), '收发流量'));
+  mrow.appendChild(mcell(fmtDur(m.sessionMs || 0), '本次在线'));
+  mrow.appendChild(mcell(fmtDur(m.onlineMs || 0), '累计在线'));
+  card.appendChild(mrow);
+  if (!d.online && m.lastError) {
+    card.appendChild(el('div', 'dev-err', '离线原因：' + m.lastError));
+  }
 
   // MCP 端点
   const endpoint = location.origin + (lastStats ? (lastStats.mcpPath || '/mcp') : '/mcp') + '/' + d.device;
