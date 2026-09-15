@@ -694,9 +694,7 @@ function renderStatus(st) {
 }
 
 /* ---------- 连接信息：三网络地址（keyed diff 渲染，不重建 DOM） ---------- */
-var currentTab = 'local';
 function selTab(tab) {
-  currentTab = tab;
   Array.prototype.forEach.call($('seg').querySelectorAll('button'), function (b) {
     b.classList.toggle('on', b.dataset.tab === tab);
   });
@@ -984,7 +982,6 @@ function toggleTools(btn) {
   TOOLS_OPEN = !TOOLS_OPEN;
   $('toolList').classList.toggle('hidden', !TOOLS_OPEN);
   btn.textContent = TOOLS_OPEN ? '收起列表' : '展开列表';
-  btn.dataset.label = btn.textContent;
   if (TOOLS_OPEN) loadTools();
 }
 function loadTools() {
@@ -1067,14 +1064,12 @@ function renderTools() {
 
 /* ---------- 日志 ---------- */
 var logSource = 'mcpd';
-var LOG_TEXT = { mcpd: '', tunnel: '' };
 var LOG_TIMER = null;
 function setLogSource(src) {
   logSource = src;
   Array.prototype.forEach.call($('logSeg').querySelectorAll('button'), function (b) {
     b.classList.toggle('on', b.dataset.src === src);
   });
-  LOG_TEXT.mcpd = '';
   loadLogs(true);
 }
 /* 自动刷新：服务日志与隧道日志任一开启即启动 3s 定时器 */
@@ -1103,8 +1098,7 @@ function writePre(el, text) {
 function loadLogs(force, src) {
   var source = src || logSource;
   var target = source === 'tunnel' ? $('tunLogs') : $('logs');
-  // 面板不可见且非强制时不加载（降负载）
-  var panel = source === 'tunnel' ? $('cardTunnel') : $('cardLogs');
+  // 面板不可见时不加载（降负载）
   if (!force && document.hidden) return;
   function useKsu() {
     if (!hasBridge()) { target.textContent = '日志读取需要 KernelSU 桥接或本地 API'; return Promise.resolve(); }
