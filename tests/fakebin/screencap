@@ -1,0 +1,14 @@
+#!/bin/sh
+# 模拟 screencap -p [-d id] <path>
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p) ;;
+    -d) shift ;;
+    *) out="$1" ;;
+  esac
+  shift
+done
+[ -n "$out" ] || exit 1
+cat "$(dirname "$0")/sample.png" > "$out"
+exit 0

@@ -1,0 +1,15 @@
+#!/bin/sh
+case "$1 $2" in
+  "wifi status") cat <<'EOF'
+Wifi is enabled
+WifiInfo: SSID: "MyHomeWiFi", BSSID: 00:11:22:33:44:55, IP: /192.168.1.23
+EOF
+;;
+  "clipboard get-text") echo "剪贴板示例内容";;
+  "clipboard set-text") echo "clipboard set: $3" >> /tmp/ksumcp-clip.log; exit 0;;
+  "bluetooth_manager enable"|"bluetooth_manager disable") exit 0;;
+  "notification set_dnd") exit 0;;
+  "location set-location-enabled") exit 0;;
+  "wifi set-wifi-enabled") exit 0;;
+  *) echo "unknown cmd" >&2; exit 1;;
+esac

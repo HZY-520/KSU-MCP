@@ -1,0 +1,10 @@
+#!/bin/sh
+# 模拟 pm list packages [-3|-s|-e|-d]
+DIR="$(dirname "$0")"
+case "$*" in
+  *"-3"*) grep -v "^package:com.android" "$DIR/packages.txt" ;;
+  *"-s"*) grep "^package:com.android" "$DIR/packages.txt" ;;
+  *"-e"*) head -4 "$DIR/packages.txt" ;;
+  *"-d"*) tail -2 "$DIR/packages.txt" ;;
+  *) cat "$DIR/packages.txt" ;;
+esac

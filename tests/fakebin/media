@@ -1,0 +1,6 @@
+#!/bin/sh
+case "$*" in
+  *"--get"*) echo 7;;
+  *"--set"*) echo "media $*" >> /tmp/ksumcp-media.log; exit 0;;
+  *) exit 1;;
+esac

@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "input $*" >> /tmp/ksumcp-input.log
+exit 0

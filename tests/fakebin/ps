@@ -1,0 +1,17 @@
+#!/bin/sh
+if [ "$1" = "-A" ] && [ "$2" = "-o" ]; then
+cat <<'EOF'
+PID PPID USER       RSS   VSZ NAME
+  1    0 root      2048 10240 init
+  512  1 system   40960 204800 system_server
+ 1234 512 u0_a123  98304 512000 com.tencent.mm
+ 2345 512 u0_a145 204800 900000 com.example.demo
+EOF
+else
+cat <<'EOF'
+USER PID PPID VSZ RSS WCHAN ADDR S NAME
+root 1 0 10240 2048 SyS_epoll 0 S init
+system 512 1 204800 40960 SyS_epoll 0 S system_server
+u0_a123 1234 512 512000 98304 SyS_epoll 0 S com.tencent.mm
+EOF
+fi

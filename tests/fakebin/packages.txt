@@ -1,0 +1,7 @@
+package:com.android.settings
+package:com.android.systemui
+package:com.android.providers.media
+package:com.tencent.mm
+package:com.tencent.mobileqq
+package:com.example.demo
+package:org.telegram.messenger

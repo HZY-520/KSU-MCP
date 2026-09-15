@@ -1,0 +1,8 @@
+#!/bin/sh
+cat <<'EOF'
+Filesystem     1024-blocks     Used Available Capacity Mounted on
+/dev/block/dm-6    4096000  3891200    204800      96% /
+tmpfs              3891200        0   3891200       0% /dev
+/dev/block/dm-7  117878784 52428800  65449984      45% /data
+/dev/block/dm-8    2097152  1048576   1048576      50% /vendor
+EOF

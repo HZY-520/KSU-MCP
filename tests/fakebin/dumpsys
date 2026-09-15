@@ -1,0 +1,14 @@
+#!/bin/sh
+if [ "$1" = "battery" ]; then
+cat <<'EOF'
+Current Battery Service state:
+  AC powered: false
+  USB powered: true
+  status: 2
+  health: 2
+  level: 87
+  voltage: 4231
+  temperature: 312
+  technology: Li-ion
+EOF
+fi

@@ -1,0 +1,8 @@
+#!/bin/sh
+cat <<'EOF'
+06-12 10:00:00.123  1234  5678 I ActivityManager: Start proc com.example.demo
+06-12 10:00:01.234  1234  5678 W ActivityManager: slow operation
+06-12 10:00:02.345  2345  6789 E AndroidRuntime: FATAL EXCEPTION: main
+06-12 10:00:03.456  2345  6789 E AndroidRuntime: java.lang.NullPointerException
+06-12 10:00:04.567   512   600 I SystemServer: boot completed
+EOF

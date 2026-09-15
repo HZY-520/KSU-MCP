@@ -1,0 +1,37 @@
+#!/bin/sh
+# 模拟 Android getprop
+if [ -n "$1" ]; then
+  case "$1" in
+    ro.product.brand) echo "Xiaomi" ;;
+    ro.product.manufacturer) echo "Xiaomi" ;;
+    ro.product.model) echo "23127PN0CC" ;;
+    ro.product.device) echo "houji" ;;
+    ro.product.name) echo "houji_cn" ;;
+    ro.build.version.release) echo "14" ;;
+    ro.build.version.sdk) echo "34" ;;
+    ro.build.id) echo "UKQ1.231003.002" ;;
+    ro.build.type) echo "user" ;;
+    ro.build.version.security_patch) echo "2024-06-01" ;;
+    ro.product.cpu.abi) echo "arm64-v8a" ;;
+    ro.product.cpu.abilist) echo "arm64-v8a,armeabi-v7a,armeabi" ;;
+    ro.build.fingerprint) echo "Xiaomi/houji_cn/houji:14/UKQ1.231003.002/V816:user/release-keys" ;;
+    ro.bootloader) echo "unknown" ;;
+    ro.kernelsu.version) echo "0.9.5" ;;
+    gsm.operator.alpha) echo "CHINA MOBILE" ;;
+    gsm.operator.iso-country) echo "cn" ;;
+    gsm.network.type) echo "NR" ;;
+    net.dns1) echo "192.168.1.1" ;;
+    dhcp.wlan0.ssid) echo "MyHomeWiFi" ;;
+    ro.product.model) echo "23127PN0CC" ;;
+    *) echo "" ;;
+  esac
+  exit 0
+fi
+cat <<'EOF'
+[ro.product.brand]: [Xiaomi]
+[ro.product.model]: [23127PN0CC]
+[ro.build.version.release]: [14]
+[ro.build.version.sdk]: [34]
+[persist.sys.locale]: [zh-CN]
+[gsm.operator.alpha]: [CHINA MOBILE]
+EOF

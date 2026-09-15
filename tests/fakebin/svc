@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "svc $*" >> /tmp/ksumcp-svc.log
+echo "Power Manager is not available" >&2
+exit 0

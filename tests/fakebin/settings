@@ -1,0 +1,33 @@
+#!/bin/sh
+# 模拟 Android settings，带持久化状态（便于验证「写入后读回校验」）
+DIR="$(dirname "$0")"
+STATE="$DIR/.settings.state"
+touch "$STATE"
+key="$2.$3"
+case "$1" in
+  get)
+    v=$(grep "^$key=" "$STATE" 2>/dev/null | tail -1 | cut -d= -f2)
+    if [ -n "$v" ]; then echo "$v"; else
+      case "$key" in
+        global.airplane_mode_on) echo 0;;
+        global.wifi_on) echo 1;;
+        global.bluetooth_on) echo 0;;
+        global.mobile_data) echo 1;;
+        global.stay_on_while_plugged_in) echo 0;;
+        global.zen_mode) echo 0;;
+        secure.location_mode) echo 3;;
+        system.accelerometer_rotation) echo 1;;
+        system.screen_brightness) echo 128;;
+        *) echo "";;
+      esac
+    fi
+    ;;
+  put)
+    grep -v "^$key=" "$STATE" > "$STATE.tmp" 2>/dev/null || true
+    mv "$STATE.tmp" "$STATE" 2>/dev/null || true
+    echo "$key=$4" >> "$STATE"
+    echo "put $*" >> /tmp/ksumcp-settings.log
+    exit 0
+    ;;
+  *) echo "";;
+esac
