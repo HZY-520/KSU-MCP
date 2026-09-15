@@ -1,0 +1,20 @@
+{
+  "port": 8081,
+  "tls": {
+    "cert": "",
+    "key": ""
+  },
+  "tunnelPath": "/tunnel",
+  "mcpPath": "/mcp",
+  "requestTimeout": 90000,
+  "devices": {
+    "my-phone": {
+      "tunnelToken": "生成一个足够长的随机串，例如 openssl rand -hex 24",
+      "clientToken": "再生成一个，给远端 MCP 客户端用"
+    }
+  },
+  "admin": {
+    "username": "admin",
+    "password": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9"
+  }
+}

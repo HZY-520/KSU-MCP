@@ -1,0 +1,16 @@
+{
+  "name": "ksu-mcp-tunnel-server",
+  "version": "1.1.0",
+  "description": "内网穿透服务端：把设备上的 KSU MCP Server 通过公网域名 n.huziyang.top 暴露给远端 MCP 客户端，内置 WebUI 管理台（/admin，支持自定义 Token / 踢下线 / 移动端 UI）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "Apache-2.0"
+}
