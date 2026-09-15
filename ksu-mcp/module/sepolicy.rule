@@ -1,0 +1,8 @@
+# KSU MCP Server - SELinux 规则（可选）
+# 默认仅监听 127.0.0.1 本地回环，通常无需额外规则。
+# 若开启局域网访问（--bind 0.0.0.0）遇到 SELinux 拒绝，可在此追加规则，例如：
+#
+# allow mcpd self:tcp_socket { create bind listen accept read write getattr setopt };
+# allow mcpd self:unix_stream_socket { connectto };
+# allow mcpd proc:file { read open getattr };
+# allow mcpd sysfs:file { read open getattr };

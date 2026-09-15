@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>KSU MCP 控制台</title>
+<style>
+:root{
+  --bg:#07090f; --panel:rgba(20,24,38,.78); --panel2:rgba(28,33,52,.65);
+  --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.14);
+  --txt:#e9edf5; --dim:#8b93a7; --dim2:#6b7388;
+  --acc:#6366f1; --acc2:#22d3ee; --ok:#2dd48f; --err:#ff5d73; --warn:#ffb454;
+  --r:18px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html{scroll-behavior:smooth}
+body{
+  min-height:100vh;color:var(--txt);
+  font:14px/1.65 system-ui,-apple-system,"PingFang SC","MiSans","HarmonyOS Sans SC","Noto Sans SC",sans-serif;
+  background:
+    radial-gradient(600px 320px at 85% -10%, rgba(99,102,241,.16), transparent 60%),
+    radial-gradient(520px 300px at -10% 12%, rgba(34,211,238,.10), transparent 60%),
+    var(--bg);
+  background-attachment:fixed;
+  padding:0 0 44px;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:660px;margin:0 auto;padding:0 14px}
+
+/* ---------- 顶部 ---------- */
+.topbar{position:sticky;top:0;z-index:50;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  background:rgba(7,9,15,.72);border-bottom:1px solid var(--line)}
+.topbar-in{display:flex;align-items:center;gap:10px;padding:12px 0}
+.logo{width:34px;height:34px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-weight:800;font-size:15px;
+  box-shadow:0 4px 18px rgba(99,102,241,.4);animation:logoIn .6s cubic-bezier(.2,1.4,.4,1) both}
+@keyframes logoIn{from{opacity:0;transform:scale(.6) rotate(-12deg)}to{opacity:1;transform:none}}
+.titles{flex:1;min-width:0}
+.titles h1{font-size:16.5px;font-weight:700;letter-spacing:.2px}
+.titles p{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--dim);
+  border:1px solid var(--line);border-radius:999px;padding:3px 9px;background:var(--panel2);white-space:nowrap}
+.chip b{color:var(--txt);font-weight:600}
+.chip.on{border-color:rgba(45,212,143,.4);color:var(--ok)}
+.chip.off{border-color:rgba(255,93,115,.4);color:var(--err)}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.chip .dot.pulse{animation:pulse 1.8s ease infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 currentColor}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+
+/* ---------- 卡片 ---------- */
+.card{position:relative;margin-top:16px;overflow:hidden;border-radius:var(--r);
+  background:var(--panel);border:1px solid var(--line);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  animation:rise .6s cubic-bezier(.21,1.02,.43,1) both;animation-delay:var(--d,0s)}
+@keyframes rise{from{opacity:0;transform:translateY(16px) scale(.985)}to{opacity:1;transform:none}}
+.card::before{content:"";position:absolute;inset:0 0 auto 0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(99,102,241,.5),rgba(34,211,238,.5),transparent);opacity:.5}
+.card-h{padding:16px 18px 0}
+.card-h h2{font-size:13px;color:var(--dim);font-weight:600;letter-spacing:.6px;text-transform:uppercase}
+.card-b{padding:12px 18px 18px}
+
+/* ---------- 英雄状态 ---------- */
+.hero{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:9px;padding:9px 16px;border-radius:999px;
+  background:var(--panel2);border:1px solid var(--line2);transition:.35s}
+.pill .dot{width:11px;height:11px;border-radius:50%;background:var(--dim2);flex:none}
+.pill.on .dot{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+.pill.off .dot{background:var(--err);box-shadow:0 0 10px var(--err)}
+.pill.busy .dot{background:var(--warn);animation:spinDot 1s linear infinite}
+@keyframes spinDot{0%{box-shadow:0 0 0 0 rgba(255,180,84,.7)}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.pill .duty{font-weight:700;font-size:15px}
+.hero-meta{display:flex;gap:7px;flex-wrap:wrap}
+
+/* ---------- 按钮 ---------- */
+.btn-row{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
+.btn{position:relative;overflow:hidden;appearance:none;border:1px solid var(--line2);cursor:pointer;
+  color:var(--txt);border-radius:11px;padding:9px 16px;font-size:13.5px;font-weight:600;
+  background:var(--panel2);transition:transform .18s,box-shadow .18s,background .18s,border-color .18s}
+.btn:hover{transform:translateY(-1px);border-color:var(--acc);box-shadow:0 6px 18px rgba(99,102,241,.18)}
+.btn:active{transform:scale(.95)}
+.btn.primary{color:#fff;border-color:transparent;
+  background:linear-gradient(135deg,var(--acc),#7c5cf0);box-shadow:0 4px 16px rgba(99,102,241,.35)}
+.btn:disabled{opacity:.45;pointer-events:none}
+.btn.mini{padding:5px 11px;font-size:12px;border-radius:9px}
+.btn.danger{color:var(--err)}
+.btn.ghost{background:transparent}
+.ripple{position:absolute;border-radius:50%;background:rgba(255,255,255,.35);transform:scale(0);
+  animation:rip .55s ease-out;pointer-events:none}
+@keyframes rip{to{transform:scale(3.2);opacity:0}}
+
+/* ---------- 分段标签 ---------- */
+.seg{display:flex;background:rgba(10,13,22,.85);border:1px solid var(--line);border-radius:12px;padding:4px;gap:4px}
+.seg button{flex:1;appearance:none;border:none;background:transparent;color:var(--dim);cursor:pointer;
+  padding:8px 4px;border-radius:9px;font-size:13px;font-weight:600;transition:.25s}
+.seg button.on{color:#fff;background:linear-gradient(135deg,var(--acc),#7c5cf0);
+  box-shadow:0 3px 12px rgba(99,102,241,.35);animation:segIn .3s ease}
+@keyframes segIn{from{transform:scale(.94);opacity:.5}to{transform:none;opacity:1}}
+
+/* ---------- 键值行 ---------- */
+.kv{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px dashed var(--line);transition:.2s}
+.kv:last-child{border-bottom:none}
+.kv:hover{background:rgba(255,255,255,.02)}
+.kv .k{color:var(--dim);font-size:12.5px;min-width:76px;flex:none}
+.kv .v{flex:1;min-width:0;font-family:ui-monospace,"SF Mono",Consolas,monospace;font-size:12.3px;
+  color:#b9c6e8;word-break:break-all}
+.kv input[type=number],.kv input[type=text],.kv input[type=password]{
+  flex:1;min-width:0;background:rgba(10,13,22,.85);border:1px solid var(--line2);color:var(--txt);
+  border-radius:10px;padding:8px 11px;font-size:13.5px;outline:none;transition:border-color .2s,box-shadow .2s}
+.kv input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(99,102,241,.18)}
+.kv input::placeholder{color:var(--dim2)}
+
+/* ---------- 开关 ---------- */
+.sw{position:relative;width:44px;height:26px;flex:none}
+.sw input{opacity:0;width:0;height:0;position:absolute}
+.sw i{position:absolute;inset:0;border-radius:999px;background:rgba(255,255,255,.1);
+  border:1px solid var(--line2);transition:.3s;cursor:pointer}
+.sw i::after{content:"";position:absolute;top:2.5px;left:3px;width:19px;height:19px;border-radius:50%;
+  background:#c6ccdd;transition:.3s cubic-bezier(.34,1.56,.64,1);box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.sw input:checked+i{background:linear-gradient(135deg,var(--acc),#7c5cf0);border-color:transparent}
+.sw input:checked+i::after{left:21px;background:#fff}
+
+/* ---------- Token ---------- */
+.token-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.token-box{flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:rgba(10,13,22,.85);
+  border:1px solid var(--line2);border-radius:11px;padding:8px 12px}
+.token-box code{flex:1;min-width:0;font-size:12.5px;color:#b9c6e8;word-break:break-all;
+  font-family:ui-monospace,"SF Mono",Consolas,monospace;transition:opacity .25s}
+
+/* ---------- 预格式日志 ---------- */
+pre{background:rgba(7,9,15,.9);border:1px solid var(--line);border-radius:12px;padding:12px 14px;
+  font:11.5px/1.6 ui-monospace,"SF Mono",Consolas,monospace;max-height:280px;overflow:auto;
+  white-space:pre-wrap;word-break:break-all;color:#93a2c4;transition:max-height .4s}
+.logbar{display:flex;gap:8px;align-items:center;margin-top:10px}
+.logbar .dim{font-size:11.5px;color:var(--dim2)}
+
+/* ---------- Toast ---------- */
+.toast{position:fixed;left:50%;bottom:calc(30px + env(safe-area-inset-bottom));z-index:99;
+  transform:translate(-50%,18px);opacity:0;pointer-events:none;transition:.3s cubic-bezier(.2,1,.4,1);
+  background:rgba(30,35,55,.95);border:1px solid var(--line2);color:var(--txt);
+  padding:10px 18px;border-radius:999px;font-size:13px;max-width:86vw;backdrop-filter:blur(12px)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.ok{border-color:rgba(45,212,143,.5);color:var(--ok)}
+.toast.err{border-color:rgba(255,93,115,.5);color:var(--err)}
+
+footer{color:var(--dim2);font-size:11px;text-align:center;margin-top:22px}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.25);
+  border-top-color:#fff;border-radius:50%;animation:rot .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes rot{to{transform:rotate(360deg)}}
+.hint{font-size:11.5px;color:var(--dim2);margin-top:10px;line-height:1.7}
+.hint code{color:#93a2c4;background:rgba(10,13,22,.85);border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:11px}
+.empty{color:var(--dim2);font-size:12.5px;text-align:center;padding:14px 0}
+.fade-in{animation:fadeIn .35s ease both}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="topbar"><div class="wrap topbar-in">
+  <div class="logo">K</div>
+  <div class="titles">
+    <h1>KSU MCP 控制台</h1>
+    <p id="sub">正在连接内核桥…</p>
+  </div>
+  <span class="chip" id="watchChip"><span class="dot"></span>守护检测中</span>
+</div></div>
+
+<div class="wrap">
+
+  <!-- 服务状态 -->
+  <section class="card" style="--d:.02s">
+    <div class="card-h"><h2>服务状态</h2></div>
+    <div class="card-b">
+      <div class="hero">
+        <span class="pill busy" id="pill"><span class="dot"></span><span class="duty" id="pillText">检测中…</span></span>
+        <span class="hero-meta">
+          <span class="chip">PID <b id="pidVal">-</b></span>
+          <span class="chip">端口 <b id="portVal">-</b></span>
+          <span class="chip" id="lanChip">局域网</span>
+        </span>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" id="btnStart" onclick="act('start',this)">启动</button>
+        <button class="btn" onclick="act('restart',this)">重启</button>
+        <button class="btn" onclick="act('stop',this)">停止</button>
+        <button class="btn ghost" onclick="refresh(true)">刷新</button>
+      </div>
+      <p class="hint">服务由 <b>进程守护（watchdog）</b> 托管：每 10 秒巡检，崩溃或被杀后自动拉起；离开本页面 / 关闭 KernelSU Manager 均不影响后台运行。</p>
+    </div>
+  </section>
+
+  <!-- 接入信息 -->
+  <section class="card" style="--d:.07s">
+    <div class="card-h"><h2>接入信息</h2></div>
+    <div class="card-b">
+      <div class="seg" id="seg">
+        <button class="on" data-tab="local" onclick="selTab('local',this)">本机</button>
+        <button data-tab="lan" onclick="selTab('lan',this)">局域网</button>
+        <button data-tab="wan" onclick="selTab('wan',this)">公网</button>
+      </div>
+
+      <div id="tab-local" class="fade-in" style="margin-top:12px">
+        <div class="kv"><span class="k">Streamable HTTP</span><span class="v" id="uLocal">http://127.0.0.1:9123/mcp</span><button class="btn mini ghost" onclick="copyText('uLocal')">复制</button></div>
+        <div class="kv"><span class="k">SSE（旧）</span><span class="v" id="uSse">http://127.0.0.1:9123/sse</span><button class="btn mini ghost" onclick="copyText('uSse')">复制</button></div>
+      </div>
+
+      <div id="tab-lan" class="hidden" style="margin-top:12px"></div>
+      <div id="tab-wan" class="hidden" style="margin-top:12px"></div>
+
+      <div class="token-row">
+        <div class="token-box">
+          <code id="tokenVal">-</code>
+          <button class="btn mini ghost" id="eyeBtn" onclick="toggleToken()">显示</button>
+        </div>
+        <button class="btn mini" onclick="copyToken()">复制</button>
+        <button class="btn mini" onclick="regenToken(this)">重新生成</button>
+      </div>
+      <p class="hint">客户端接入：类型 Streamable HTTP，URL 见上方，鉴权 <code>Bearer &lt;Token&gt;</code>。</p>
+    </div>
+  </section>
+
+  <!-- 配置 -->
+  <section class="card" style="--d:.12s">
+    <div class="card-h"><h2>运行配置</h2></div>
+    <div class="card-b">
+      <div class="kv"><span class="k">端口</span><input type="number" id="cfgPort" min="1" max="65535"><span class="k" style="min-width:0">命令超时</span><input type="number" id="cfgTimeout" min="1" style="max-width:88px"><span class="k" style="min-width:0">秒</span></div>
+      <div class="kv"><span class="k">局域网访问</span><span class="v" style="font-family:inherit;color:var(--dim);font-size:12.5px" id="lanHint">监听 0.0.0.0，同网段设备可连（强制 Token 鉴权）</span><label class="sw"><input type="checkbox" id="cfgLan" onchange="lanSwitchChange()"><i></i></label></div>
+      <div class="kv"><span class="k">只读模式</span><span class="v" style="font-family:inherit;color:var(--dim);font-size:12.5px">禁用 exec_command / write_file</span><label class="sw"><input type="checkbox" id="cfgReadonly"><i></i></label></div>
+      <div class="kv"><span class="k">开机自启</span><span class="v" style="font-family:inherit;color:var(--dim);font-size:12.5px" id="autoHint">watchdog 随开机自动运行</span><label class="sw"><input type="checkbox" id="cfgAuto" onchange="autoSwitchChange(this)"><i></i></label></div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveCfg(this)">保存并生效</button>
+      </div>
+      <p class="hint">保存后自动重启服务使配置生效。<span id="disabledWarn" class="hidden" style="color:var(--warn)">当前已禁用自启（/data/adb/ksu_mcp/disabled），开启开关即可恢复。</span></p>
+    </div>
+  </section>
+
+  <!-- 隧道 -->
+  <section class="card" style="--d:.17s">
+    <div class="card-h"><h2>内网穿透</h2></div>
+    <div class="card-b">
+      <div class="hero" style="margin-bottom:4px">
+        <span class="pill off" id="tunPill"><span class="dot"></span><span class="duty" id="tunPillText">未连接</span></span>
+        <span class="chip">公共入口 <b id="tunPub">-</b></span>
+      </div>
+      <div class="kv"><span class="k">启用隧道</span><span class="v" style="font-family:inherit;color:var(--dim);font-size:12.5px">开机自动连接，断线自动重连</span><label class="sw"><input type="checkbox" id="tunEnable"><i></i></label></div>
+      <div class="kv"><span class="k">服务器</span><input type="text" id="tunServer" placeholder="wss://n.huziyang.top/tunnel"></div>
+      <div class="kv"><span class="k">设备名</span><input type="text" id="tunDevice" placeholder="my-phone"></div>
+      <div class="kv"><span class="k">Token</span><input type="password" id="tunToken" placeholder="服务端分配的 tunnelToken" autocomplete="off"></div>
+      <div class="kv"><span class="k">直连 IP</span><input type="text" id="tunIp" placeholder="DNS 异常时兜底（可选）"></div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveTunnel(this)">保存配置</button>
+        <button class="btn" id="tunConnect" onclick="tunConnect(this)">立即连接</button>
+        <button class="btn danger" id="tunStop" onclick="tunStop(this)">断开</button>
+      </div>
+      <p class="hint">设备主动外连服务端，无需端口映射。服务端 ≥ v1.1.0 时支持流式转发与心跳保活，公网访问不掉线。</p>
+    </div>
+  </section>
+
+  <!-- 日志 -->
+  <section class="card" style="--d:.22s">
+    <div class="card-h"><h2>运行日志</h2></div>
+    <div class="card-b">
+      <pre id="logs">加载中…</pre>
+      <div class="logbar">
+        <button class="btn mini" onclick="loadLogs()">刷新日志</button>
+        <span class="dim">自动刷新</span>
+        <label class="sw" style="width:38px;height:23px"><input type="checkbox" id="logAuto"><i style="width:38px;height:23px"></i></label>
+      </div>
+    </div>
+  </section>
+
+  <footer>KSU MCP Server v1.1.0 · watchdog 守护 · 默认仅监听 127.0.0.1</footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// KernelSU WebUI 桥接层（与官方 kernelsu 包一致的调用契约）
+//   ksu.exec(cmd, optionsJSON, callbackName) -> window[cb](errno, stdout, stderr)
+// 兼容旧版注入（window.KernelSU / Promise 风格）
+// ============================================================
+const BIN = '/data/adb/modules/ksu_mcp/bin/mcpd';
+const DATA = '/data/adb/ksu_mcp';
+let _seq = 0;
+
+function ksuBridge() {
+  if (window.ksu && typeof window.ksu.exec === 'function') return { obj: window.ksu, style: 'ksu' };
+  if (window.KernelSU && typeof window.KernelSU.exec === 'function') return { obj: window.KernelSU, style: 'legacy' };
+  return null;
+}
+
+function ksuExec(cmd) {
+  return new Promise((resolve, reject) => {
+    const b = ksuBridge();
+    if (!b) { reject(new Error('WebUI 桥接不可用：请通过 KernelSU Manager 打开本页面')); return; }
+    if (b.style === 'ksu') {
+      const cb = 'ksu_mcp_' + Date.now() + '_' + (++_seq);
+      window[cb] = function (errno, stdout, stderr) {
+        delete window[cb];
+        resolve({ errno: errno | 0, stdout: stdout || '', stderr: stderr || '' });
+      };
+      try { b.obj.exec(cmd, '{}', cb); }
+      catch (e) { delete window[cb]; reject(e); }
+      return;
+    }
+    try {
+      const r = b.obj.exec(cmd);
+      if (r && typeof r.then === 'function') r.then(resolve, reject); else resolve(r);
+    } catch (e) { reject(e); }
+  });
+}
+
+async function run(cmd) {
+  const r = await ksuExec(cmd);
+  if (r && typeof r === 'object' && r.errno !== undefined) {
+    if (r.errno !== 0 && r.stderr) throw new Error((r.stderr || '').trim());
+    return r.stdout || '';
+  }
+  if (r && typeof r === 'object' && r.stdout !== undefined) return r.stdout || '';
+  return String(r || '');
+}
+
+// ---------------- 通用工具 ----------------
+const $ = (id) => document.getElementById(id);
+let toastTimer = null;
+function toast(msg, type) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + (type || '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.className = 'toast'), 3200);
+}
+function parseJson(s) { try { return JSON.parse(s); } catch (e) { return null; } }
+function escQ(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+function mask(t) {
+  if (!t || t === '-') return t;
+  if (t.length <= 12) return t.slice(0, 3) + '••••' + t.slice(-3);
+  return t.slice(0, 6) + '••••••••' + t.slice(-4);
+}
+function ripple(btn, e) {
+  if (!btn) return;
+  const r = document.createElement('span');
+  r.className = 'ripple';
+  const rect = btn.getBoundingClientRect();
+  const d = Math.max(rect.width, rect.height);
+  r.style.width = r.style.height = d + 'px';
+  r.style.left = ((e.clientX || rect.left + rect.width / 2) - rect.left - d / 2) + 'px';
+  r.style.top = ((e.clientY || rect.top + rect.height / 2) - rect.top - d / 2) + 'px';
+  btn.appendChild(r);
+  setTimeout(() => r.remove(), 600);
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.btn');
+  if (b) ripple(b, e);
+});
+
+async function copyText(pure) {
+  const el = typeof pure === 'string' ? $(pure) : pure;
+  const text = el.textContent.trim();
+  if (!text || text === '-') { toast('暂无内容可复制', 'err'); return; }
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; }
+  catch (e) {
+    const r = document.createRange(); r.selectNodeContents(el);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    ok = document.execCommand('copy'); sel.removeAllRanges();
+  }
+  toast(ok ? '已复制' : '复制失败，请长按手动复制', ok ? 'ok' : 'err');
+}
+
+// ---------------- 状态 ----------------
+let STATUS = null;
+let fullToken = '';
+let busy = false;
+
+async function refresh(showToast) {
+  if (busy) return;
+  busy = true;
+  try {
+    const out = await run(BIN + ' status');
+    const st = parseJson(out);
+    if (!st) throw new Error('status 输出无法解析');
+    STATUS = st;
+    fullToken = st.token || '';
+    renderStatus(st);
+    renderEndpoints(st);
+    renderCfg(st);
+    renderTunnelCfg(st);
+    renderWatchChip(st);
+    if (showToast) toast('状态已刷新', 'ok');
+  } catch (e) {
+    STATUS = null;
+    setPill('busy', '桥接不可用');
+    toast(String(e.message || e), 'err');
+  } finally {
+    busy = false;
+  }
+}
+
+function setPill(cls, text) {
+  const p = $('pill');
+  p.className = 'pill ' + cls;
+  $('pillText').textContent = text;
+}
+
+function renderStatus(st) {
+  if (st.running) {
+    setPill('on', '运行中');
+    $('pidVal').textContent = st.pid;
+  } else {
+    setPill('off', st.disabled ? '已停止 · 自启已禁用' : '未运行');
+    $('pidVal').textContent = '-';
+  }
+  $('portVal').textContent = st.port;
+  $('sub').textContent = 'v' + st.version + ' · 配置 ' + st.config;
+  $('lanChip').className = 'chip ' + (st.bind === '0.0.0.0' ? 'on' : '');
+  $('lanChip').innerHTML = '<span class="dot' + (st.bind === '0.0.0.0' ? ' pulse' : '') + '"></span>局域网' + (st.bind === '0.0.0.0' ? ' 已开启' : ' 未开启');
+}
+
+function renderWatchChip(st) {
+  const c = $('watchChip');
+  const wd = st.watchdog || {};
+  c.className = 'chip ' + (wd.running ? 'on' : 'off');
+  c.innerHTML = '<span class="dot' + (wd.running ? ' pulse' : '') + '"></span>守护' + (wd.running ? '运行中' : '未运行');
+  if (!wd.running) {
+    c.style.cursor = 'pointer';
+    c.title = '点击开启进程守护';
+    c.onclick = () => act('start');
+  } else {
+    c.style.cursor = 'default';
+    c.onclick = null;
+  }
+}
+
+// ---------------- 接入信息 ----------------
+function selTab(tab) {
+  document.querySelectorAll('#seg button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  ['local', 'lan', 'wan'].forEach((t) => {
+    $('tab-' + t).classList.toggle('hidden', t !== tab);
+  });
+}
+
+function renderEndpoints(st) {
+  const host = (st.bind === '0.0.0.0') ? '0.0.0.0' : st.bind;
+  $('uLocal').textContent = 'http://' + (host === '0.0.0.0' ? '127.0.0.1' : host) + ':' + st.port + '/mcp';
+  $('uSse').textContent = 'http://' + (host === '0.0.0.0' ? '127.0.0.1' : host) + ':' + st.port + '/sse';
+
+  // 局域网
+  const lanBox = $('tab-lan');
+  lanBox.textContent = '';
+  const ips = st.lan_ips || [];
+  if (st.bind !== '0.0.0.0') {
+    const p = document.createElement('p');
+    p.className = 'empty';
+    p.innerHTML = '局域网访问未开启。在「运行配置」中打开「局域网访问」开关即可。';
+    lanBox.appendChild(p);
+  } else if (!ips.length) {
+    const p = document.createElement('p');
+    p.className = 'empty';
+    p.textContent = '未检测到局域网 IP，请确认已连接 WiFi。';
+    lanBox.appendChild(p);
+  } else {
+    ips.forEach((ip, i) => {
+      const div = document.createElement('div');
+      div.className = 'kv';
+      div.innerHTML = '<span class="k">' + (i === 0 ? 'Streamable HTTP' : '') + '</span>' +
+        '<span class="v">http://' + ip + ':' + st.port + '/mcp</span>' +
+        '<button class="btn mini ghost">复制</button>';
+      div.querySelector('button').onclick = () => copyText(div.querySelector('.v'));
+      lanBox.appendChild(div);
+    });
+  }
+
+  // 公网
+  const wanBox = $('tab-wan');
+  wanBox.textContent = '';
+  const tun = st.tunnel || {};
+  if (!tun.server) {
+    const p = document.createElement('p');
+    p.className = 'empty';
+    p.textContent = '未配置隧道服务器，请先填写下方「内网穿透」。';
+    wanBox.appendChild(p);
+  } else {
+    let pub = '';
+    try {
+      const u = new URL(tun.server.replace(/^wss?:\/\//, 'https://'));
+      pub = u.origin + '/mcp/' + (tun.device || 'device');
+    } catch (e) { pub = '配置无效'; }
+    const div = document.createElement('div');
+    div.className = 'kv';
+    div.innerHTML = '<span class="k">Streamable HTTP</span><span class="v">' + pub + '</span>' +
+      '<button class="btn mini ghost">复制</button>';
+    div.querySelector('button').onclick = () => pub.startsWith('http') && copyText(div.querySelector('.v'));
+    wanBox.appendChild(div);
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.innerHTML = '鉴权用服务端下发的 <code>clientToken</code>（Bearer）。设备需在线且隧道已连接。';
+    wanBox.appendChild(p);
+    try { $('tunPub').textContent = pub; } catch (e) {}
+  }
+
+  // Token
+  $('tokenVal').textContent = st.token ? mask(st.token) : '（无鉴权）';
+  $('eyeBtn').textContent = '显示';
+  $('eyeBtn').disabled = !st.token;
+}
+
+function toggleToken() {
+  if (!fullToken) return;
+  const shown = $('tokenVal').textContent === fullToken;
+  $('tokenVal').textContent = shown ? mask(fullToken) : fullToken;
+  $('eyeBtn').textContent = shown ? '显示' : '隐藏';
+}
+function copyToken() {
+  if (!fullToken) { toast('无 Token', 'err'); return; }
+  const el = $('tokenVal');
+  const prev = el.textContent;
+  el.textContent = fullToken;
+  copyText(el);
+  setTimeout(() => { el.textContent = STATUS && STATUS.token ? (el.textContent === fullToken ? mask(STATUS.token) : el.textContent) : '-'; }, 200);
+}
+
+async function regenToken(btn) {
+  btn.disabled = true;
+  try {
+    await run(BIN + ' token --regen');
+    toast('Token 已重新生成', 'ok');
+    await refresh(false);
+  } catch (e) { toast(e.message, 'err'); }
+  finally { btn.disabled = false; }
+}
+
+// ---------------- 操作 ----------------
+async function act(action, btn) {
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>处理中'; }
+  const orig = btn ? btn.textContent : '';
+  try {
+    let cmd = '';
+    if (action === 'start') {
+      cmd = BIN + ' watchdog --detach';
+    } else if (action === 'stop') {
+      cmd = BIN + ' stop';
+    } else if (action === 'restart') {
+      cmd = BIN + ' stop; sleep 1; ' + BIN + ' watchdog --detach';
+    }
+    const out = await run(cmd);
+    toast(out && out.trim() ? out.split('\n').pop().trim() : (action === 'start' ? '守护进程已启动' : '操作完成'), 'ok');
+    await refresh(false);
+    await refreshTunnel();
+    await loadLogs();
+  } catch (e) {
+    toast(String(e.message || e), 'err');
+    await refresh(false);
+  } finally {
+    if (btn) { btn.disabled = false; }
+  }
+}
+
+// ---------------- 配置 ----------------
+function renderCfg(st) {
+  $('cfgPort').value = st.port;
+  $('cfgTimeout').value = st.exec_timeout;
+  $('cfgLan').checked = st.bind === '0.0.0.0';
+  $('cfgReadonly').checked = !!st.read_only;
+  $('cfgAuto').checked = !st.disabled;
+  $('disabledWarn').classList.toggle('hidden', !st.disabled);
+  $('autoHint').textContent = st.disabled ? '自启已禁用（touch disabled 标记）' : 'watchdog 随开机自动运行';
+}
+
+function lanSwitchChange() {
+  $('lanHint').style.color = $('cfgLan').checked ? 'var(--ok)' : 'var(--dim)';
+}
+function autoSwitchChange() {
+  $('autoHint').textContent = $('cfgAuto').checked ? 'watchdog 随开机自动运行' : '禁用后开机不再自动拉起';
+}
+
+async function saveCfg(btn) {
+  const port = parseInt($('cfgPort').value, 10);
+  const timeout = parseInt($('cfgTimeout').value, 10);
+  const readonly = $('cfgReadonly').checked ? 'true' : 'false';
+  const lan = $('cfgLan').checked ? 'true' : 'false';
+  if (!port || port < 1 || port > 65535) { toast('端口无效', 'err'); return; }
+  if (!timeout || timeout < 1) { toast('超时无效', 'err'); return; }
+  btn.disabled = true; btn.textContent = '保存中…';
+  try {
+    await run(BIN + ' config-set --port ' + port + ' --exec-timeout ' + timeout + ' --read-only ' + readonly + ' --lan ' + lan);
+    if ($('cfgAuto').checked) {
+      await run("rm -f " + DATA + "/disabled");
+    } else {
+      await run("echo 1 > " + DATA + "/disabled");
+    }
+    toast('配置已保存，正在重启服务…', 'ok');
+    await run(BIN + ' stop');
+    await run(BIN + ' watchdog --detach');
+    await refresh(false);
+    toast('服务已重启，配置生效', 'ok');
+  } catch (e) { toast(String(e.message || e), 'err'); }
+  finally { btn.disabled = false; btn.textContent = '保存并生效'; }
+}
+
+// ---------------- 隧道 ----------------
+function renderTunnelCfg(st) {
+  const tun = st.tunnel || {};
+  $('tunEnable').checked = !!tun.enabled;
+  if (!$('tunServer').value || document.activeElement !== $('tunServer')) $('tunServer').value = tun.server || '';
+  if (!$('tunDevice').value || document.activeElement !== $('tunDevice')) $('tunDevice').value = tun.device || '';
+  $('tunIp').value = $('tunIp').value || tun.ip || '';
+}
+
+async function refreshTunnel() {
+  try {
+    const out = await run(BIN + ' tunnel-status');
+    const st = parseJson(out);
+    if (!st) throw new Error('解析失败');
+    const pill = $('tunPill');
+    if (st.running) {
+      pill.className = 'pill on';
+      $('tunPillText').textContent = '已连接 · ' + (st.device || '');
+      $('tunConnect').disabled = true;
+      $('tunStop').disabled = false;
+    } else {
+      pill.className = 'pill off';
+      $('tunPillText').textContent = st.enabled ? '未连接 · 自动重连中' : '未启用';
+      $('tunConnect').disabled = false;
+      $('tunStop').disabled = true;
+    }
+  } catch (e) {
+    $('tunPill').className = 'pill off';
+    $('tunPillText').textContent = '状态不可用';
+  }
+}
+
+async function saveTunnel(btn) {
+  const enable = $('tunEnable').checked ? 'true' : 'false';
+  const server = $('tunServer').value.trim();
+  const device = $('tunDevice').value.trim();
+  const token = $('tunToken').value.trim();
+  const ip = $('tunIp').value.trim();
+  if (!server || !device || !token) { toast('服务器 / 设备名 / Token 不能为空', 'err'); return; }
+  btn.disabled = true;
+  try {
+    let cmd = BIN + ' config-set --tunnel-enable ' + enable +
+      ' --tunnel-server ' + escQ(server) +
+      ' --tunnel-device ' + escQ(device) +
+      ' --tunnel-token ' + escQ(token);
+    if (ip) cmd += ' --tunnel-ip ' + escQ(ip);
+    await run(cmd);
+    toast('隧道配置已保存', 'ok');
+    if (enable === 'true') await tunConnect($('tunConnect'));
+    else { await tunStop($('tunStop'), true); }
+  } catch (e) { toast(String(e.message || e), 'err'); }
+  finally { btn.disabled = false; }
+}
+
+async function tunConnect(btn, silent) {
+  const server = $('tunServer').value.trim();
+  const device = $('tunDevice').value.trim();
+  const token = $('tunToken').value.trim();
+  const ip = $('tunIp').value.trim();
+  if (!server || !device || !token) { toast('请先填写服务器 / 设备名 / Token', 'err'); return; }
+  if (btn) btn.disabled = true;
+  try {
+    let cmd = BIN + ' tunnel --server ' + escQ(server) + ' --device ' + escQ(device) + ' --token ' + escQ(token);
+    if (ip) cmd += ' --ip ' + escQ(ip);
+    cmd += ' --detach';
+    const out = await run(cmd);
+    if (!silent && out.trim()) toast(out.trim().split('\n').pop(), 'ok');
+    await refreshTunnel();
+  } catch (e) { toast(String(e.message || e), 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+async function tunStop(btn, silent) {
+  try {
+    await run(BIN + ' tunnel-stop');
+    if (!silent) toast('隧道已断开', 'ok');
+    await refreshTunnel();
+  } catch (e) { toast(String(e.message || e), 'err'); }
+}
+
+// ---------------- 日志 ----------------
+async function loadLogs() {
+  try {
+    const out = await run(BIN + ' logs 200');
+    $('logs').textContent = out && out.trim() ? out : '(暂无日志)';
+    $('logs').scrollTop = $('logs').scrollHeight;
+  } catch (e) {
+    $('logs').textContent = '读取日志失败: ' + (e.message || e);
+  }
+}
+
+// ---------------- 初始化 ----------------
+let refreshTimer = null;
+function startTimer() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(() => {
+    if (document.hidden) return; // 页面隐藏时暂停轮询，节省资源
+    refresh(false);
+    refreshTunnel();
+    if ($('logAuto').checked) loadLogs();
+  }, 5000);
+}
+
+refresh(true);
+refreshTunnel();
+loadLogs();
+startTimer();
+</script>
+</body>
+</html>

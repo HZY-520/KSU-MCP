@@ -1,0 +1,42 @@
+# Nginx 反代示例（n.huziyang.top → 本机 Node 服务 127.0.0.1:8081）
+# 宝塔面板可直接参考：网站 → n.huziyang.top → 配置文件 粘贴本段；SSL 用面板「SSL」一键申请
+# certbot --nginx -d n.huziyang.top
+
+server {
+    listen 80;
+    server_name n.huziyang.top;
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name n.huziyang.top;
+
+    ssl_certificate     /etc/letsencrypt/live/n.huziyang.top/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/n.huziyang.top/privkey.pem;
+
+    # 设备 WebSocket 接入（关键：必须保留 Upgrade 头）
+    location /tunnel {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 300s;
+    }
+
+    # 远端 MCP 客户端端点
+    location /mcp {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 120s;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+    }
+}

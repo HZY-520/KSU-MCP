@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>KSU MCP Tunnel 管理台</title>
+<style>
+:root{
+  --bg:#07090f; --panel:rgba(20,24,38,.8); --panel2:rgba(28,33,52,.65);
+  --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.15);
+  --txt:#e9edf5; --dim:#8b93a7; --dim2:#6b7388;
+  --acc:#6366f1; --acc2:#22d3ee; --ok:#2dd48f; --err:#ff5d73; --warn:#ffb454;
+  --r:18px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{
+  min-height:100vh;color:var(--txt);
+  font:14px/1.65 system-ui,-apple-system,"PingFang SC","MiSans","HarmonyOS Sans SC","Noto Sans SC",sans-serif;
+  background:
+    radial-gradient(700px 340px at 90% -10%, rgba(99,102,241,.17), transparent 60%),
+    radial-gradient(560px 320px at -10% 10%, rgba(34,211,238,.1), transparent 60%),
+    var(--bg);
+  background-attachment:fixed;padding:0 0 56px;-webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:880px;margin:0 auto;padding:0 14px}
+.hidden{display:none!important}
+
+/* ---------- 顶部 ---------- */
+.topbar{position:sticky;top:0;z-index:50;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  background:rgba(7,9,15,.72);border-bottom:1px solid var(--line)}
+.topbar-in{display:flex;align-items:center;gap:10px;padding:12px 0;flex-wrap:wrap}
+.logo{width:34px;height:34px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-weight:800;font-size:15px;
+  box-shadow:0 4px 18px rgba(99,102,241,.4);animation:logoIn .6s cubic-bezier(.2,1.4,.4,1) both}
+@keyframes logoIn{from{opacity:0;transform:scale(.6) rotate(-12deg)}to{opacity:1;transform:none}}
+.titles{flex:1;min-width:0}
+.titles h1{font-size:16.5px;font-weight:700}
+.titles p{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--dim);
+  border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:var(--panel2);white-space:nowrap}
+
+/* ---------- 卡片 ---------- */
+.card{position:relative;margin-top:16px;overflow:hidden;border-radius:var(--r);background:var(--panel);
+  border:1px solid var(--line);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  animation:rise .6s cubic-bezier(.21,1.02,.43,1) both;animation-delay:var(--d,0s)}
+@keyframes rise{from{opacity:0;transform:translateY(16px) scale(.985)}to{opacity:1;transform:none}}
+.card::before{content:"";position:absolute;inset:0 0 auto 0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(99,102,241,.5),rgba(34,211,238,.5),transparent);opacity:.5}
+.card-h{display:flex;align-items:center;gap:10px;padding:16px 18px 0;flex-wrap:wrap}
+.card-h h2{font-size:13px;color:var(--dim);font-weight:600;letter-spacing:.6px;text-transform:uppercase}
+.card-h .sp{flex:1}
+.card-b{padding:12px 18px 18px}
+
+/* ---------- 统计 ---------- */
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.stat .box{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:12px 15px;
+  transition:transform .25s,border-color .25s}
+.stat .box:hover{transform:translateY(-2px);border-color:var(--line2)}
+.stat b{display:block;font-size:23px;font-weight:800;font-variant-numeric:tabular-nums;
+  background:linear-gradient(120deg,#fff,#aeb8ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat span{color:var(--dim);font-size:11.5px}
+
+/* ---------- 按钮 / 输入 ---------- */
+.btn{position:relative;overflow:hidden;appearance:none;border:1px solid var(--line2);cursor:pointer;
+  color:var(--txt);border-radius:11px;padding:8px 15px;font-size:13px;font-weight:600;background:var(--panel2);
+  transition:transform .18s,box-shadow .18s,border-color .18s,background .18s}
+.btn:hover{transform:translateY(-1px);border-color:var(--acc);box-shadow:0 6px 18px rgba(99,102,241,.18)}
+.btn:active{transform:scale(.95)}
+.btn.primary{color:#fff;border-color:transparent;background:linear-gradient(135deg,var(--acc),#7c5cf0);
+  box-shadow:0 4px 16px rgba(99,102,241,.35)}
+.btn.mini{padding:4px 10px;font-size:11.5px;border-radius:8px}
+.btn.danger{color:var(--err)}
+.btn.ghost{background:transparent}
+.btn:disabled{opacity:.45;pointer-events:none}
+.ripple{position:absolute;border-radius:50%;background:rgba(255,255,255,.35);transform:scale(0);
+  animation:rip .55s ease-out;pointer-events:none}
+@keyframes rip{to{transform:scale(3.2);opacity:0}}
+input{background:rgba(10,13,22,.85);border:1px solid var(--line2);color:var(--txt);border-radius:10px;
+  padding:9px 11px;font-size:13.5px;outline:none;width:100%;transition:border-color .2s,box-shadow .2s}
+input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(99,102,241,.18)}
+input::placeholder{color:var(--dim2)}
+.field{margin-top:12px}
+.field label{display:block;font-size:12px;color:var(--dim);margin-bottom:6px}
+.field .row{display:flex;gap:8px;align-items:center}
+.field .row input{flex:1;min-width:0}
+.mono{font-family:ui-monospace,"SF Mono",Consolas,monospace}
+
+/* ---------- 设备卡片 ---------- */
+.devgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-top:12px}
+.dev{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:14px 16px;
+  transition:transform .25s,border-color .25s,box-shadow .25s;animation:rise .5s cubic-bezier(.21,1.02,.43,1) both}
+.dev:hover{transform:translateY(-3px);border-color:var(--line2);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.dev-h{display:flex;align-items:center;gap:9px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--dim2);flex:none}
+.dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok);animation:pulse 2s ease infinite}
+.dot.off{background:var(--err)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(45,212,143,.7)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.dev-h .name{font-weight:700;font-size:14.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dev-h .badge{font-size:10.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);flex:none}
+.dev-h .badge.on{color:var(--ok);border-color:rgba(45,212,143,.4)}
+.dev-h .badge.off{color:var(--err);border-color:rgba(255,93,115,.4)}
+.dev-meta{margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--dim)}
+.dev-end{margin-top:10px;display:flex;align-items:center;gap:8px;background:rgba(10,13,22,.85);
+  border:1px solid var(--line);border-radius:10px;padding:7px 11px}
+.dev-end code{flex:1;min-width:0;font-size:11.5px;color:#b9c6e8;word-break:break-all}
+.tok{margin-top:8px}
+.tok .row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.tok .lbl{font-size:11px;color:var(--dim);width:64px;flex:none}
+.tok code{flex:1;min-width:0;font-size:11.5px;color:#b9c6e8;word-break:break-all;background:rgba(10,13,22,.85);
+  border:1px solid var(--line);border-radius:8px;padding:5px 9px}
+.dev-ops{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+
+/* ---------- 模态 ---------- */
+.overlay{position:fixed;inset:0;z-index:100;background:rgba(4,6,12,.6);backdrop-filter:blur(6px);
+  -webkit-backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;
+  opacity:0;transition:opacity .28s}
+.overlay.show{opacity:1}
+.sheet{width:100%;max-width:480px;background:rgba(22,26,42,.98);border:1px solid var(--line2);
+  border-radius:22px 22px 0 0;padding:20px 20px calc(20px + env(safe-area-inset-bottom));
+  transform:translateY(40px);transition:transform .35s cubic-bezier(.2,1.2,.4,1)}
+.overlay.show .sheet{transform:none}
+@media (min-width:520px){
+  .overlay{align-items:center;padding:20px}
+  .sheet{border-radius:20px;transform:translateY(16px) scale(.97)}
+}
+.sheet h3{font-size:16px;font-weight:700;margin-bottom:4px}
+.sheet .sub{font-size:12px;color:var(--dim)}
+.sheet .btns{display:flex;gap:10px;margin-top:18px}
+.sheet .btns .btn{flex:1}
+
+/* ---------- 登录 ---------- */
+.login-wrap{max-width:360px;margin:0 auto;padding:12vh 14px 0}
+.login-wrap .lcard{padding:26px 26px 24px;animation:rise .5s cubic-bezier(.21,1.02,.43,1) both}
+.login-wrap .lhead{display:flex;align-items:center;gap:11px;margin-bottom:6px}
+.login-wrap h2{font-size:18px;font-weight:800}
+.login-wrap .sub{color:var(--dim);font-size:12px;margin-bottom:14px}
+.shake{animation:shake .45s}
+@keyframes shake{0%,100%{transform:none}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
+
+/* ---------- 日志 / 杂项 ---------- */
+pre{background:rgba(7,9,15,.9);border:1px solid var(--line);border-radius:12px;padding:12px 14px;
+  font:11.5px/1.6 ui-monospace,"SF Mono",Consolas,monospace;max-height:280px;overflow:auto;
+  white-space:pre-wrap;word-break:break-all;color:#93a2c4}
+.logbar{display:flex;gap:8px;align-items:center;margin-top:10px}
+.logbar .dim{font-size:11.5px;color:var(--dim2)}
+.sw{position:relative;width:38px;height:23px;flex:none}
+.sw input{opacity:0;width:0;height:0;position:absolute}
+.sw i{position:absolute;inset:0;border-radius:999px;background:rgba(255,255,255,.1);border:1px solid var(--line2);transition:.3s;cursor:pointer}
+.sw i::after{content:"";position:absolute;top:2.5px;left:3px;width:16px;height:16px;border-radius:50%;
+  background:#c6ccdd;transition:.3s cubic-bezier(.34,1.56,.64,1)}
+.sw input:checked+i{background:linear-gradient(135deg,var(--acc),#7c5cf0);border-color:transparent}
+.sw input:checked+i::after{left:18px;background:#fff}
+.toast{position:fixed;left:50%;bottom:calc(30px + env(safe-area-inset-bottom));z-index:200;
+  transform:translate(-50%,18px);opacity:0;pointer-events:none;transition:.3s cubic-bezier(.2,1,.4,1);
+  background:rgba(30,35,55,.95);border:1px solid var(--line2);color:var(--txt);
+  padding:10px 18px;border-radius:999px;font-size:13px;max-width:86vw;backdrop-filter:blur(12px)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.ok{border-color:rgba(45,212,143,.5);color:var(--ok)}
+.toast.err{border-color:rgba(255,93,115,.5);color:var(--err)}
+footer{color:var(--dim2);font-size:11px;text-align:center;margin-top:22px}
+.empty{color:var(--dim2);font-size:13px;text-align:center;padding:22px 0}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.25);
+  border-top-color:#fff;border-radius:50%;animation:rot .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes rot{to{transform:rotate(360deg)}}
+.fade{animation:fadeIn .35s ease both}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<!-- 登录视图 -->
+<div id="loginView" class="login-wrap hidden">
+  <div class="card lcard">
+    <div class="lhead"><div class="logo">T</div><h2>KSU MCP Tunnel</h2></div>
+    <p class="sub">内网穿透服务端管理台 · 请登录后管理设备</p>
+    <div class="field"><label>用户名</label><input id="loginUser" value="admin" autocomplete="username"></div>
+    <div class="field"><label>密码</label><input id="loginPass" type="password" placeholder="请输入密码" autocomplete="current-password"></div>
+    <div class="field btns"><button class="btn primary" style="flex:1" onclick="doLogin()">登 录</button></div>
+    <p class="sub" style="margin-top:14px">默认账号 admin / admin123，登录后请在「管理密码」处修改。连续 5 次失败锁定 IP 10 分钟。</p>
+  </div>
+</div>
+
+<!-- 主视图 -->
+<div id="mainView" class="hidden">
+  <div class="topbar"><div class="wrap topbar-in">
+    <div class="logo">T</div>
+    <div class="titles">
+      <h1>KSU MCP Tunnel 管理台</h1>
+      <p id="svcInfo">连接中…</p>
+    </div>
+    <span class="chip" id="upTime">已运行 -</span>
+    <button class="btn mini ghost" onclick="logout()">退出</button>
+  </div></div>
+
+  <div class="wrap">
+    <!-- 统计 -->
+    <section class="card" style="--d:.02s">
+      <div class="card-b" style="padding-top:16px">
+        <div class="stat">
+          <div class="box"><b id="stDev">-</b><span>设备在线 / 总数</span></div>
+          <div class="box"><b id="stReq">-</b><span>累计转发请求</span></div>
+          <div class="box"><b id="stFail">-</b><span>失败请求</span></div>
+          <div class="box"><b id="stAct">-</b><span>正在转发</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 设备管理 -->
+    <section class="card" style="--d:.07s">
+      <div class="card-h">
+        <h2>设备管理</h2>
+        <span class="sp"></span>
+        <button class="btn primary" onclick="openAdd()">+ 添加设备</button>
+      </div>
+      <div class="card-b">
+        <div class="devgrid" id="devGrid"><p class="empty">加载中…</p></div>
+      </div>
+    </section>
+
+    <!-- 修改密码 -->
+    <section class="card" style="--d:.12s">
+      <div class="card-h"><h2>管理密码</h2></div>
+      <div class="card-b">
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <input id="oldPass" type="password" placeholder="旧密码" style="flex:1;min-width:130px">
+          <input id="newPass" type="password" placeholder="新密码（至少 6 位）" style="flex:1;min-width:130px">
+          <button class="btn primary" onclick="changePass()">修改</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 日志 -->
+    <section class="card" style="--d:.17s">
+      <div class="card-h"><h2>运行日志</h2><span class="chip" id="logCount">-</span></div>
+      <div class="card-b">
+        <pre id="logs">加载中…</pre>
+        <div class="logbar">
+          <button class="btn mini" onclick="loadLogs()">刷新日志</button>
+          <span class="dim">自动刷新</span>
+          <label class="sw"><input type="checkbox" id="logAuto"><i></i></label>
+        </div>
+      </div>
+    </section>
+
+    <footer>KSU MCP Tunnel Server v1.1.0 · 流式转发 · 请通过 HTTPS 访问本管理台</footer>
+  </div>
+</div>
+
+<!-- 添加设备（底部弹层） -->
+<div class="overlay" id="addOverlay">
+  <div class="sheet">
+    <h3>添加设备</h3>
+    <p class="sub">Token 留空将自动生成 48 位随机串；也可自定义（16-128 位字母 / 数字 / . _ -）</p>
+    <div class="field">
+      <label>设备名（与手机端一致，字母数字 . _ -）</label>
+      <input id="ndName" placeholder="如 my-phone" maxlength="64">
+    </div>
+    <div class="field">
+      <label>tunnelToken（设备端使用，可选）</label>
+      <div class="row">
+        <input id="ndTunnel" class="mono" placeholder="留空自动生成">
+        <button class="btn mini ghost" onclick="randFill('ndTunnel')">随机</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>clientToken（远端 MCP 客户端使用，可选）</label>
+      <div class="row">
+        <input id="ndClient" class="mono" placeholder="留空自动生成">
+        <button class="btn mini ghost" onclick="randFill('ndClient')">随机</button>
+      </div>
+    </div>
+    <div class="btns">
+      <button class="btn" onclick="closeAdd()">取消</button>
+      <button class="btn primary" id="addBtn" onclick="addDevice()">添加</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+let toastTimer = null;
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + (type || '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.className = 'toast'), 3200);
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+  const r = await fetch(path, opts);
+  let d = null;
+  try { d = await r.json(); } catch (e) { /* ignore */ }
+  if (r.status === 401) { showLogin(); throw new Error('未登录'); }
+  if (!r.ok || (d && d.ok === false)) throw new Error((d && d.error) || ('HTTP ' + r.status));
+  return d;
+}
+
+// ---------------- 工具 ----------------
+function fmtDur(ms) {
+  if (!ms) return '-';
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return d + '天' + h + '时';
+  if (h > 0) return h + '时' + m + '分';
+  return m + '分' + (s % 60) + '秒';
+}
+function fmtTime(t) {
+  if (!t) return '-';
+  const d = new Date(t);
+  const p = (n) => String(n).padStart(2, '0');
+  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function mask(t) {
+  if (!t) return t;
+  if (t.length <= 12) return t.slice(0, 3) + '••••' + t.slice(-3);
+  return t.slice(0, 6) + '••••••••' + t.slice(-4);
+}
+function randHex24() {
+  const a = new Uint8Array(24);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+function randFill(id) {
+  document.getElementById(id).value = randHex24();
+  toast('已填入随机 Token', 'ok');
+}
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+// 按钮涟漪
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.btn');
+  if (!b) return;
+  const r = el('span', 'ripple');
+  const rect = b.getBoundingClientRect();
+  const d = Math.max(rect.width, rect.height);
+  r.style.width = r.style.height = d + 'px';
+  r.style.left = ((e.clientX || rect.left + rect.width / 2) - rect.left - d / 2) + 'px';
+  r.style.top = ((e.clientY || rect.top + rect.height / 2) - rect.top - d / 2) + 'px';
+  b.appendChild(r);
+  setTimeout(() => r.remove(), 600);
+});
+
+async function copyText(text, msg) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; }
+  catch (e) {
+    const ta = el('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    ok = document.execCommand('copy'); ta.remove();
+  }
+  toast(ok ? msg : '复制失败，请手动选择复制', ok ? 'ok' : 'err');
+}
+
+// 数字滚动动画
+function countUp(curId, target) {
+  const elId = curId;
+  const node = document.getElementById(elId);
+  if (!node) return;
+  const from = parseInt(node.textContent, 10);
+  if (isNaN(from) || from === target) { node.textContent = target; return; }
+  const t0 = performance.now(), dur = 500;
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / dur);
+    const eased = 1 - Math.pow(1 - k, 3);
+    node.textContent = Math.round(from + (target - from) * eased);
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// ---------------- 登录 ----------------
+function showLogin() {
+  document.getElementById('mainView').classList.add('hidden');
+  document.getElementById('loginView').classList.remove('hidden');
+}
+function showMain() {
+  document.getElementById('loginView').classList.add('hidden');
+  document.getElementById('mainView').classList.remove('hidden');
+  refreshStatus();
+  loadLogs();
+}
+
+async function doLogin() {
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  if (!user || !pass) { shake(); toast('请输入用户名和密码', 'err'); return; }
+  try {
+    await api('/api/login', { method: 'POST', body: JSON.stringify({ username: user, password: pass }) });
+    toast('登录成功', 'ok');
+    showMain();
+  } catch (e) {
+    shake();
+    toast(String(e.message || e), 'err');
+  }
+}
+function shake() {
+  const c = document.querySelector('.lcard');
+  if (!c) return;
+  c.classList.remove('shake');
+  void c.offsetWidth;
+  c.classList.add('shake');
+}
+async function logout() {
+  try { await api('/api/logout', { method: 'POST', body: '{}' }); } catch (e) { /* ignore */ }
+  showLogin();
+}
+
+// ---------------- 状态 ----------------
+let lastStats = null;
+async function refreshStatus() {
+  try {
+    const st = await api('/api/status');
+    document.getElementById('svcInfo').textContent = st.app + ' v' + st.version + ' · 端口 ' + st.port + (st.tls ? ' · TLS' : '') + ' · 管理员 ' + st.adminUser;
+    document.getElementById('upTime').textContent = '已运行 ' + fmtDur(st.uptime);
+    const online = st.devices.filter((d) => d.online).length;
+    countUp('stDev', online + ' / ' + st.devices.length);
+    countUp('stReq', st.stats.requests);
+    countUp('stFail', st.stats.failures);
+    countUp('stAct', st.stats.active);
+    renderDevices(st.devices);
+    lastStats = st;
+  } catch (e) { /* 保持现状，401 已跳登录 */ }
+}
+
+// ---------------- 设备渲染 ----------------
+function renderDevices(devices) {
+  const grid = document.getElementById('devGrid');
+  grid.textContent = '';
+  if (!devices.length) {
+    grid.appendChild(el('p', 'empty', '暂无设备，点击右上角「添加设备」开始'));
+    return;
+  }
+  devices.forEach((d, i) => grid.appendChild(devCard(d, i)));
+}
+
+function devCard(d, i) {
+  const card = el('div', 'dev');
+  card.style.animationDelay = Math.min(i * 0.04, 0.3) + 's';
+
+  // 头：状态 + 名称
+  const head = el('div', 'dev-h');
+  head.appendChild(el('span', 'dot ' + (d.online ? 'on' : 'off')));
+  head.appendChild(el('span', 'name', d.device));
+  const badge = el('span', 'badge ' + (d.online ? 'on' : 'off'), d.online ? '在线' : '离线');
+  head.appendChild(badge);
+  card.appendChild(head);
+
+  // 元信息
+  const meta = el('div', 'dev-meta');
+  meta.appendChild(el('span', '', 'IP ' + (d.remote || '-')));
+  meta.appendChild(el('span', '', '接入 ' + fmtTime(d.connectedAt)));
+  card.appendChild(meta);
+
+  // MCP 端点
+  const endpoint = location.origin + (lastStats ? (lastStats.mcpPath || '/mcp') : '/mcp') + '/' + d.device;
+  const end = el('div', 'dev-end');
+  end.appendChild(el('code', '', endpoint));
+  const copyBtn = el('button', 'btn mini ghost', '复制');
+  copyBtn.onclick = () => copyText(endpoint, '端点已复制');
+  end.appendChild(copyBtn);
+  card.appendChild(end);
+
+  // Tokens（默认遮罩，可点开）
+  const tok = el('div', 'tok');
+  tok.appendChild(tokRow('隧道 Token', d.tunnelToken));
+  tok.appendChild(tokRow('客户端 Token', d.clientToken));
+  card.appendChild(tok);
+
+  // 操作
+  const ops = el('div', 'dev-ops');
+  const mkBtn = (label, cls, fn) => {
+    const b = el('button', 'btn mini ' + (cls || ''), label);
+    b.onclick = fn;
+    return b;
+  };
+  if (d.online) {
+    ops.appendChild(mkBtn('踢下线', '', () => kickDev(d.device)));
+  }
+  ops.appendChild(mkBtn('重置隧道', '', () => rotateDev(d.device, 'tunnel')));
+  ops.appendChild(mkBtn('重置客户端', '', () => rotateDev(d.device, 'client')));
+  ops.appendChild(mkBtn('全部重置', '', () => rotateDev(d.device, 'both')));
+  const delBtn = mkBtn('删除', 'danger', function () {
+    if (delBtn.dataset.arm) { delDev(d.device); return; }
+    delBtn.dataset.arm = '1';
+    delBtn.textContent = '确认删除?';
+    setTimeout(() => { delete delBtn.dataset.arm; delBtn.textContent = '删除'; }, 3000);
+  });
+  ops.appendChild(delBtn);
+  card.appendChild(ops);
+  return card;
+}
+
+function tokRow(label, token) {
+  const row = el('div', 'row');
+  row.appendChild(el('span', 'lbl', label));
+  const code = el('code', '', mask(token));
+  row.appendChild(code);
+  const eye = el('button', 'btn mini ghost', '显示');
+  eye.onclick = () => {
+    const shown = code.textContent === token;
+    code.textContent = shown ? mask(token) : token;
+    eye.textContent = shown ? '显示' : '隐藏';
+  };
+  row.appendChild(eye);
+  const cp = el('button', 'btn mini ghost', '复制');
+  cp.onclick = () => copyText(token, label + ' 已复制');
+  row.appendChild(cp);
+  return row;
+}
+
+// ---------------- 设备操作 ----------------
+function openAdd() {
+  document.getElementById('addOverlay').classList.remove('hidden');
+  document.getElementById('addOverlay').classList.add('show');
+  document.getElementById('ndName').focus();
+}
+function closeAdd() {
+  const o = document.getElementById('addOverlay');
+  o.classList.remove('show');
+  setTimeout(() => o.classList.add('hidden'), 300);
+}
+document.getElementById('addOverlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeAdd();
+});
+
+async function addDevice() {
+  const name = document.getElementById('ndName').value.trim();
+  if (!name) { toast('请输入设备名', 'err'); return; }
+  const btn = document.getElementById('addBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>添加中';
+  try {
+    const d = await api('/api/devices', {
+      method: 'POST',
+      body: JSON.stringify({
+        device: name,
+        tunnelToken: document.getElementById('ndTunnel').value.trim(),
+        clientToken: document.getElementById('ndClient').value.trim(),
+      }),
+    });
+    document.getElementById('ndName').value = '';
+    document.getElementById('ndTunnel').value = '';
+    document.getElementById('ndClient').value = '';
+    closeAdd();
+    toast('设备 ' + d.device + ' 已添加', 'ok');
+    refreshStatus();
+  } catch (e) { toast(String(e.message || e), 'err'); }
+  finally { btn.disabled = false; btn.textContent = '添加'; }
+}
+
+async function delDev(device) {
+  try {
+    await api('/api/devices/' + encodeURIComponent(device), { method: 'DELETE' });
+    toast('已删除 ' + device, 'ok');
+    refreshStatus();
+  } catch (e) { toast(String(e.message || e), 'err'); }
+}
+
+async function rotateDev(device, which) {
+  try {
+    await api('/api/devices/' + encodeURIComponent(device) + '/rotate', {
+      method: 'POST',
+      body: JSON.stringify({ which }),
+    });
+    toast(which === 'client' ? 'clientToken 已重置' : (which === 'tunnel' ? 'tunnelToken 已重置，设备需用新 Token 重连' : '双 Token 已重置'), 'ok');
+    refreshStatus();
+  } catch (e) { toast(String(e.message || e), 'err'); }
+}
+
+async function kickDev(device) {
+  try {
+    await api('/api/devices/' + encodeURIComponent(device) + '/kick', { method: 'POST', body: '{}' });
+    toast('已踢下线 ' + device + '（设备将自动重连）', 'ok');
+    setTimeout(refreshStatus, 800);
+  } catch (e) { toast(String(e.message || e), 'err'); }
+}
+
+async function changePass() {
+  const oldP = document.getElementById('oldPass').value;
+  const newP = document.getElementById('newPass').value;
+  if (!oldP || !newP) { toast('请填写新旧密码', 'err'); return; }
+  if (newP.length < 6) { toast('新密码至少 6 位', 'err'); return; }
+  try {
+    await api('/api/password', { method: 'POST', body: JSON.stringify({ old: oldP, new: newP }) });
+    document.getElementById('oldPass').value = '';
+    document.getElementById('newPass').value = '';
+    toast('密码已修改', 'ok');
+  } catch (e) { toast(String(e.message || e), 'err'); }
+}
+
+// ---------------- 日志 ----------------
+async function loadLogs() {
+  try {
+    const d = await api('/api/logs?n=200');
+    const pre = document.getElementById('logs');
+    pre.textContent = d.logs.length ? d.logs.join('\n') : '(暂无日志)';
+    pre.scrollTop = pre.scrollHeight;
+    document.getElementById('logCount').textContent = d.logs.length + ' 条';
+  } catch (e) {
+    document.getElementById('logs').textContent = '读取失败: ' + (e.message || e);
+  }
+}
+
+// ---------------- 初始化 ----------------
+(async function init() {
+  try {
+    await api('/api/status');
+    showMain();
+  } catch (e) { showLogin(); }
+})();
+
+setInterval(() => {
+  if (document.getElementById('mainView').classList.contains('hidden')) return;
+  if (document.hidden) return;
+  refreshStatus();
+  if (document.getElementById('logAuto').checked) loadLogs();
+}, 5000);
+</script>
+</body>
+</html>
