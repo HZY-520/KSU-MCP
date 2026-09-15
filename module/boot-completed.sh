@@ -26,7 +26,8 @@ mkdir -p "$DATA_DIR"
 [ -f "$CONFIG" ] || "$BIN" init-config >/dev/null 2>&1
 
 # 统一守护入口：watchdog 每 10s 巡检 daemon 与隧道，异常自动拉起
-if ! "$BIN" watchdog-status 2>/dev/null | grep -q '"running": true'; then
+# watchdog-status 退出码：0=运行中，2=未运行（不依赖 JSON 文本解析）
+if ! "$BIN" watchdog-status >/dev/null 2>&1; then
     "$BIN" watchdog --detach
 fi
 

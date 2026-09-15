@@ -23,7 +23,7 @@ if ! command -v abort >/dev/null 2>&1; then
 fi
 
 ui_print "*******************************"
-ui_print "  KSU MCP Server v1.1.0"
+ui_print "  KSU MCP Server v1.2.0 (MCP 2025-11-25 · 32 tools)"
 ui_print "*******************************"
 
 # 1. 检测 CPU 架构，保留对应二进制
@@ -65,8 +65,11 @@ fi
 # 尝试立即拉起进程守护（部分环境安装后不会马上执行 service.sh，
 # 这里直接启动 watchdog，由它负责 daemon 与隧道的拉起与保活）
 "$MODDIR/bin/mcpd" watchdog --detach >/dev/null 2>&1 \
-    && ui_print "- 进程守护已启动（每 10s 巡检 daemon 与隧道）" \
+    && ui_print "- 进程守护已启动（每 10s 巡检 daemon，含隧道卡死检测）" \
     || ui_print "- 进程守护将在下次开机/WebUI 操作时启动"
+
+# 输出关键参数，便于安装日志自查
+ui_print "- 隧道保活参数: 心跳 10s / 判死 35s / 退避上限 30s / 网卡轮询 5s"
 
 ui_print "- 安装完成，重启或打开 KernelSU 管理器中的 WebUI 生效"
 exit 0
