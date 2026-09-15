@@ -1,6 +1,6 @@
 id=ksu_mcp
 name=KSU MCP Server
-version=v1.2.1
-versionCode=4
+version=v1.3.0
+versionCode=5
 author=Doubao
-description=Rooted-device embedded MCP server (v1.2.1): MCP 2025-11-25 protocol, 32 tools (21 spec-named android_* incl. screenshot image blocks, package pagination, process/logcat/storage/network queries, input injection, settings toggles), watchdog-supervised daemon with tunnel liveness detection, Streamable HTTP (/mcp) + legacy SSE on port 9123, LAN access, tunnel client with 10s heartbeat/35s dead-detection and quality metrics, rebuilt zero-jank WebUI showing local/LAN/public endpoints.
+description=Rooted-device embedded MCP server (v1.3.0): MCP 2025-11-25, 40 tools — 8 new UI-hierarchy tools (android_get_screen_elements/find_element/tap_element/set_element_text/wait_for_element/scroll_to_element/dump_ui_hierarchy/get_foreground_app) that read the uiautomator control tree and return structured text+id+center coordinates instead of screenshots, plus info/battery/storage/network/logcat/process/settings/input/shell/file tools; watchdog-supervised daemon with tunnel liveness detection; Streamable HTTP + SSE; LAN access; tunnel client with 10s heartbeat/35s dead-detection and quality metrics; zero-jank WebUI. Ships with an installable AI skill pack.
