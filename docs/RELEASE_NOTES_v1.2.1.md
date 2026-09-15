@@ -109,3 +109,4 @@ v1.2.1 首次发布后，仓库做了一次**行为不变**的前端死代码清
 | `ksu-mcp-server-v1.2.1.zip` | **KernelSU / Magisk 模块包**（含 arm64 + arm 双架构二进制、安装脚本、WebUI） |
 | `mcpd-arm64-v1.2.1` | 独立 arm64 二进制（aarch64，静态链接，已剥离符号） |
 | `mcpd-arm-v1.2.1` | 独立 arm 二进制（ARM EABI5，静态链接，已剥离符号） |
+| `ksu-mcp-tunnel-server-v1.2.0.zip` | 公网穿透**服务端**包（server.js / admin.html / 配置样例 / Nginx 样例 / 部署手册；不含 config.json 与 node_modules）。服务端代码在 v1.2.1 未变动，故仍标记为 v1.2.0 |
