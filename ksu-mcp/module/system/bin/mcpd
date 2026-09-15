@@ -1,0 +1,6 @@
+#!/system/bin/sh
+# ------------------------------------------------------------------
+# systemless 包装器：把 mcpd 暴露到 /system/bin，供 Termux/终端/脚本直接调用
+# 安装后可直接执行：mcpd status / mcpd daemon --detach 等
+# ------------------------------------------------------------------
+exec /data/adb/modules/ksu_mcp/bin/mcpd "$@"

@@ -1,0 +1,6 @@
+id=ksu_mcp
+name=KSU MCP Server
+version=v1.0.0
+versionCode=1
+author=Doubao
+description=Rooted-device embedded MCP server: Streamable HTTP (/mcp) + legacy SSE on port 9123, LAN support, built-in tunnel client (wss://n.huziyang.top/tunnel) with DNS-fallback direct IP, tools for shell/file/device/apps/battery/network/screenshot. WebUI control panel included.

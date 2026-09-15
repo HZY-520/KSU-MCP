@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KSU MCP 控制台</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --line: #262b36;
+    --txt: #e8eaef; --dim: #9aa3b2; --acc: #4f7cff;
+    --ok: #34c77b; --err: #f0564a; --warn: #f0a020;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--txt);
+    font: 14px/1.6 -apple-system, "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif;
+    padding: 16px 14px 40px;
+  }
+  header h1 { font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  header .sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px; margin-top: 14px;
+  }
+  .card h2 { font-size: 13px; color: var(--dim); font-weight: 600; margin-bottom: 10px; letter-spacing: .5px; }
+  .status-row { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.off { background: var(--err); }
+  .dot.busy { background: var(--warn); }
+  #statusText { font-weight: 600; }
+  #ver { margin-left: auto; color: var(--dim); font-size: 12px; }
+  .btn-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  button {
+    appearance: none; border: 1px solid var(--line); background: #20242e; color: var(--txt);
+    border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer; transition: .15s;
+  }
+  button:active { transform: scale(.96); }
+  button.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
+  button.danger { color: var(--err); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .kv { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--line); flex-wrap: wrap; }
+  .kv:last-child { border-bottom: none; }
+  .kv > span:first-child { color: var(--dim); min-width: 64px; flex: none; }
+  .kv code {
+    background: #0d0f13; border: 1px solid var(--line); border-radius: 6px;
+    padding: 3px 8px; font-size: 12px; word-break: break-all; flex: 1; min-width: 0;
+  }
+  .kv input[type=number], .kv input[type=text] {
+    background: #0d0f13; border: 1px solid var(--line); color: var(--txt);
+    border-radius: 6px; padding: 5px 8px; font-size: 13px; flex: 1; min-width: 0;
+  }
+  .kv input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--acc); }
+  .hint { color: var(--dim); font-size: 11.5px; margin-top: 8px; }
+  pre {
+    background: #0d0f13; border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px; font: 11px/1.5 ui-monospace, "SF Mono", Consolas, monospace;
+    max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+    color: #b9c2d0;
+  }
+  .toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(10px);
+    background: #20242e; border: 1px solid var(--line); color: var(--txt);
+    padding: 9px 16px; border-radius: 999px; font-size: 13px; opacity: 0;
+    transition: .25s; pointer-events: none; z-index: 99; max-width: 86vw;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.ok { border-color: var(--ok); color: var(--ok); }
+  .toast.err { border-color: var(--err); color: var(--err); }
+  footer { color: var(--dim); font-size: 11px; text-align: center; margin-top: 20px; }
+  .logo { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #4f7cff, #7b5cff); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; color: #fff; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="logo">M</span>KSU MCP 控制台</h1>
+  <div class="sub">设备内嵌 MCP 服务 · Streamable HTTP + SSE + 内网穿透 · 配置 /data/adb/ksu_mcp/config.json</div>
+</header>
+
+<section class="card">
+  <h2>服务状态</h2>
+  <div class="status-row">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">检测中…</span>
+    <span id="ver"></span>
+  </div>
+  <div class="btn-row">
+    <button class="primary" onclick="act('start')">启动</button>
+    <button onclick="act('stop')">停止</button>
+    <button onclick="act('restart')">重启</button>
+    <button onclick="refresh(true)">刷新</button>
+  </div>
+</section>
+
+<section class="card">
+  <h2>连接信息（供 MCP 客户端）</h2>
+  <div class="kv"><span>Streamable HTTP</span><code id="addrMcp">-</code></div>
+  <div class="kv"><span>SSE（旧）</span><code id="addrSse">-</code></div>
+  <div class="kv"><span>Token</span><code id="token">-</code><button id="copyBtn" onclick="copyToken()">复制</button></div>
+  <div class="kv"><span>配置目录</span><code id="cfgdir">-</code></div>
+  <div class="btn-row">
+    <button onclick="regenToken()">重新生成 Token</button>
+  </div>
+  <p class="hint">Cherry Studio / ChatBox：类型 Streamable HTTP，URL <code>http://127.0.0.1:9123/mcp</code>（局域网用手机 IP），鉴权方式 Bearer。</p>
+</section>
+
+<section class="card">
+  <h2>配置</h2>
+  <div class="kv"><span>端口</span><input type="number" id="port" min="1" max="65535" value="9123"></div>
+  <div class="kv"><span>命令超时</span><input type="number" id="timeout" min="1" value="30"><span style="color:var(--dim)">秒</span></div>
+  <div class="kv"><span>只读模式</span><input type="checkbox" id="readonly"></div>
+  <div class="kv"><span>局域网访问</span><input type="checkbox" id="lan"><span class="hint" style="margin:0">开启后监听 0.0.0.0，同网段设备可连</span></div>
+  <div class="btn-row">
+    <button class="primary" onclick="saveCfg()">保存配置</button>
+  </div>
+  <p class="hint">只读模式会禁用 exec_command / write_file。局域网模式必须保持 Token 鉴权开启。保存后需重启服务生效。</p>
+</section>
+
+<section class="card">
+  <h2>内网穿透（设备为客户端）</h2>
+  <div class="status-row">
+    <span class="dot" id="tunDot"></span>
+    <span id="tunText">未连接</span>
+  </div>
+  <div class="kv"><span>启用</span><input type="checkbox" id="tunEnable"></div>
+  <div class="kv"><span>服务器</span><input type="text" id="tunServer" placeholder="wss://n.huziyang.top/tunnel"></div>
+  <div class="kv"><span>设备名</span><input type="text" id="tunDevice" placeholder="my-phone"></div>
+  <div class="kv"><span>Token</span><input type="text" id="tunToken" placeholder="服务端分配的 tunnelToken"></div>
+  <div class="kv"><span>直连 IP（可选）</span><input type="text" id="tunIp" placeholder="如 103.205.240.107；DNS 解析失败时兜底"></div>
+  <div class="btn-row">
+    <button class="primary" onclick="saveTunnel()">保存隧道配置</button>
+    <button id="tunConnectBtn" onclick="tunConnect()">连接</button>
+    <button id="tunStopBtn" onclick="tunStop()">断开</button>
+  </div>
+  <p class="hint">设备主动外连服务端，无需端口映射。远端客户端访问 <code>https://n.huziyang.top/mcp/&lt;设备名&gt;</code>，凭 clientToken 调用。手机 DNS 异常（如代理/去广告模块改了 resolv.conf）时，填「直连 IP」可绕过域名解析直连服务端，TLS 仍按域名校验。详见 README 隧道章节。</p>
+</section>
+
+<section class="card">
+  <h2>运行日志</h2>
+  <pre id="logs">-</pre>
+  <div class="btn-row">
+    <button onclick="loadLogs()">刷新日志</button>
+  </div>
+</section>
+
+<footer>KSU MCP Server v1.0.0 · 默认仅监听 127.0.0.1 · 开启局域网请保持 Token 鉴权</footer>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// KernelSU WebUI 桥接层
+// 官方 npm 包 kernelsu 的底层调用契约：
+//   Manager 向 WebView 注入全局对象 `ksu`（小写）
+//   ksu.exec(cmd, optionsJSON, callbackName)
+//   完成后调用 window[callbackName](errno, stdout, stderr)
+// 参考：https://kernelsu.org/zh_CN/guide/module-webui.html
+// ============================================================
+const BIN = '/data/adb/modules/ksu_mcp/bin/mcpd';
+const DATA = '/data/adb/ksu_mcp';
+
+let _seq = 0;
+
+function ksuBridge() {
+  if (window.ksu && typeof window.ksu.exec === 'function') {
+    return { obj: window.ksu, style: 'ksu' };
+  }
+  if (window.KernelSU && typeof window.KernelSU.exec === 'function') {
+    return { obj: window.KernelSU, style: 'legacy' };
+  }
+  return null;
+}
+
+function ksuExec(cmd) {
+  return new Promise((resolve, reject) => {
+    const b = ksuBridge();
+    if (!b) {
+      reject(new Error('WebUI 桥接不可用：请通过 KernelSU Manager 打开本页面（需支持 WebUI 的 Manager 版本）'));
+      return;
+    }
+    if (b.style === 'ksu') {
+      const cb = 'ksu_mcp_' + Date.now() + '_' + (++_seq);
+      window[cb] = function (errno, stdout, stderr) {
+        delete window[cb];
+        resolve({ errno: errno | 0, stdout: stdout || '', stderr: stderr || '' });
+      };
+      try {
+        b.obj.exec(cmd, '{}', cb);
+      } catch (e) {
+        delete window[cb];
+        reject(e);
+      }
+      return;
+    }
+    // 兼容实现（Promise 风格或回调风格）
+    try {
+      const r = b.obj.exec(cmd);
+      if (r && typeof r.then === 'function') {
+        r.then(resolve, reject);
+      } else {
+        resolve(r);
+      }
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function ksuToast(msg) {
+  try {
+    if (window.ksu && typeof window.ksu.toast === 'function') window.ksu.toast(String(msg));
+  } catch (e) { /* 忽略 */ }
+}
+
+// 执行命令并返回 stdout 字符串；退出码非 0 时抛出 stderr
+async function run(cmd) {
+  const r = await ksuExec(cmd);
+  if (r && typeof r === 'object' && r.errno !== undefined) {
+    if (r.errno !== 0 && r.stderr) {
+      throw new Error((r.stderr || '').trim());
+    }
+    return r.stdout || '';
+  }
+  if (r && typeof r === 'object' && r.stdout !== undefined) return r.stdout || '';
+  return String(r || '');
+}
+
+// ---------------- 工具 ----------------
+let toastTimer = null;
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + (type || '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.className = 'toast', 3000);
+}
+
+function setStatus(state) {
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  dot.className = 'dot ' + state.cls;
+  text.textContent = state.text;
+}
+
+function parseJson(s) {
+  try { return JSON.parse(s); } catch (e) { return null; }
+}
+
+// ---------------- 状态 / 操作 ----------------
+async function refresh(showToast) {
+  setStatus({ cls: 'busy', text: '查询中…' });
+  try {
+    const out = await run(BIN + ' status');
+    const st = parseJson(out);
+    if (!st) throw new Error('status 输出无法解析: ' + out);
+    setStatus(st.running
+      ? { cls: 'on', text: '运行中 · PID ' + st.pid }
+      : { cls: 'off', text: '未运行' });
+    document.getElementById('ver').textContent = 'v' + st.version;
+    const host = (st.bind === '0.0.0.0') ? '<本机局域网 IP>' : st.bind;
+    document.getElementById('addrMcp').textContent = 'http://' + host + ':' + st.port + '/mcp';
+    document.getElementById('addrSse').textContent = 'http://' + host + ':' + st.port + '/sse';
+    document.getElementById('token').textContent = st.token || '(无鉴权)';
+    document.getElementById('cfgdir').textContent = st.config;
+    document.getElementById('port').value = st.port;
+    document.getElementById('timeout').value = st.exec_timeout;
+    document.getElementById('readonly').checked = !!st.read_only;
+    document.getElementById('lan').checked = (st.bind === '0.0.0.0');
+    // 隧道状态
+    const tun = st.tunnel || {};
+    document.getElementById('tunEnable').checked = !!tun.enabled;
+    document.getElementById('tunServer').value = tun.server || '';
+    document.getElementById('tunDevice').value = tun.device || '';
+    document.getElementById('tunToken').value = tun.token || '';
+    document.getElementById('tunIp').value = tun.ip || '';
+    if (showToast) toast('状态已刷新');
+    await refreshTunnel();
+  } catch (e) {
+    setStatus({ cls: 'off', text: '桥接不可用' });
+    toast(String(e.message || e), 'err');
+  }
+}
+
+async function refreshTunnel() {
+  try {
+    const out = await run(BIN + ' tunnel-status');
+    const st = parseJson(out);
+    if (!st) throw new Error('tunnel-status 解析失败');
+    const dot = document.getElementById('tunDot');
+    const text = document.getElementById('tunText');
+    if (st.running) {
+      dot.className = 'dot on';
+      text.textContent = '已连接 · PID ' + st.pid + ' · ' + st.device;
+      document.getElementById('tunConnectBtn').disabled = true;
+      document.getElementById('tunStopBtn').disabled = false;
+    } else {
+      dot.className = 'dot off';
+      text.textContent = '未连接' + (st.enabled ? '（已启用，等待连接…）' : '');
+      document.getElementById('tunConnectBtn').disabled = false;
+      document.getElementById('tunStopBtn').disabled = true;
+    }
+  } catch (e) {
+    document.getElementById('tunDot').className = 'dot off';
+    document.getElementById('tunText').textContent = '状态不可用';
+  }
+}
+
+async function act(action) {
+  let cmd;
+  if (action === 'start') {
+    cmd = BIN + ' daemon --detach';
+  } else if (action === 'stop') {
+    cmd = BIN + ' stop';
+  } else if (action === 'restart') {
+    cmd = BIN + ' stop; sleep 1; ' + BIN + ' daemon --detach';
+  }
+  const btn = event.target;
+  btn.disabled = true;
+  try {
+    const out = await run(cmd);
+    if (out && out.trim()) toast(out.trim(), 'ok');
+    await refresh(false);
+    if (action !== 'stop') await loadLogs();
+  } catch (e) {
+    toast(String(e.message || e), 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function copyToken() {
+  const token = document.getElementById('token').textContent;
+  if (!token || token === '-') return;
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(token);
+    ok = true;
+  } catch (e) {
+    const range = document.createRange();
+    const el = document.getElementById('token');
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    ok = document.execCommand('copy');
+    sel.removeAllRanges();
+  }
+  toast(ok ? 'Token 已复制' : '复制失败，请手动长按选择复制', ok ? 'ok' : 'err');
+}
+
+async function regenToken() {
+  try {
+    await run(BIN + ' token --regen');
+    ksuToast('新 Token 已生成并保存');
+    await refresh(false);
+  } catch (e) {
+    toast(String(e.message || e), 'err');
+  }
+}
+
+async function saveCfg() {
+  const port = parseInt(document.getElementById('port').value, 10);
+  const timeout = parseInt(document.getElementById('timeout').value, 10);
+  const readonly = document.getElementById('readonly').checked ? 'true' : 'false';
+  const lan = document.getElementById('lan').checked ? 'true' : 'false';
+  if (!port || port < 1 || port > 65535) { toast('端口无效', 'err'); return; }
+  if (!timeout || timeout < 1) { toast('超时无效', 'err'); return; }
+  try {
+    await run(BIN + ' config-set --port ' + port + ' --exec-timeout ' + timeout + ' --read-only ' + readonly + ' --lan ' + lan);
+    toast('配置已保存，重启服务后生效');
+    await refresh(false);
+  } catch (e) {
+    toast(String(e.message || e), 'err');
+  }
+}
+
+async function saveTunnel() {
+  const enable = document.getElementById('tunEnable').checked ? 'true' : 'false';
+  const server = document.getElementById('tunServer').value.trim();
+  const device = document.getElementById('tunDevice').value.trim();
+  const token = document.getElementById('tunToken').value.trim();
+  const ip = document.getElementById('tunIp').value.trim();
+  if (!server || !device || !token) { toast('服务器 / 设备名 / Token 不能为空', 'err'); return; }
+  try {
+    let cmd = BIN + ' config-set --tunnel-enable ' + enable + ' --tunnel-server "' + server + '" --tunnel-device "' + device + '" --tunnel-token "' + token + '"';
+    if (ip) cmd += ' --tunnel-ip "' + ip + '"';
+    await run(cmd);
+    toast('隧道配置已保存' + (enable === 'true' ? '，正在连接…' : ''));
+    if (enable === 'true') await tunConnect();
+    else await refreshTunnel();
+  } catch (e) {
+    toast(String(e.message || e), 'err');
+  }
+}
+
+async function tunConnect() {
+  const server = document.getElementById('tunServer').value.trim();
+  const device = document.getElementById('tunDevice').value.trim();
+  const token = document.getElementById('tunToken').value.trim();
+  const ip = document.getElementById('tunIp').value.trim();
+  if (!server || !device || !token) { toast('请先填写服务器 / 设备名 / Token', 'err'); return; }
+  const btn = document.getElementById('tunConnectBtn');
+  btn.disabled = true;
+  try {
+    let cmd = BIN + ' tunnel --server "' + server + '" --device "' + device + '" --token "' + token + '"';
+    if (ip) cmd += ' --ip "' + ip + '"';
+    cmd += ' --detach';
+    const out = await run(cmd);
+    if (out && out.trim()) toast(out.trim(), 'ok');
+    await refreshTunnel();
+  } catch (e) {
+    toast(String(e.message || e), 'err');
+    btn.disabled = false;
+  }
+}
+
+async function tunStop() {
+  try {
+    await run(BIN + ' tunnel-stop');
+    toast('隧道已断开');
+    await refreshTunnel();
+  } catch (e) {
+    toast(String(e.message || e), 'err');
+  }
+}
+
+async function loadLogs() {
+  try {
+    const out = await run(BIN + ' logs 200');
+    document.getElementById('logs').textContent = out && out.trim() ? out : '(暂无日志)';
+  } catch (e) {
+    document.getElementById('logs').textContent = '读取日志失败: ' + (e.message || e);
+  }
+}
+
+// ---------------- 初始化 ----------------
+refresh(true);
+loadLogs();
+setInterval(refreshTunnel, 10000);
+</script>
+</body>
+</html>
