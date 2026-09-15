@@ -8,17 +8,31 @@
 远端 MCP 客户端 ──HTTPS──> n.huziyang.top（本服务） ──WebSocket──> 手机 mcpd tunnel ──> 手机本地 MCP Server
 ```
 
-## WebUI 管理台（v1.0.0 内置）
+## WebUI 管理台（v1.1.0 内置）
 
-浏览器打开 **`https://n.huziyang.top/admin`**（本包默认账号 **admin / admin123**，**首次登录后请立即在「修改管理密码」处更换**）：
+浏览器打开 **`https://n.huziyang.top/admin`**（本包默认账号 **admin / admin123**，**首次登录后请立即在「管理密码」处更换**）。
+新版管理台为卡片式 UI，**移动端自适应**，支持丝滑动画：
 
-- 运行统计：设备在线数、转发请求 / 失败数、当前转发中
-- 设备管理：在线状态（IP、接入时间）、新增设备、复制 / 重置 tunnelToken 与 clientToken、删除设备
+- 运行统计：设备在线数、转发请求 / 失败数、当前转发中（数字滚动动画）
+- 设备管理：在线状态（IP、接入时间）、添加设备（**可自定义 tunnelToken / clientToken**，留空自动生成 48 位随机串）、
+  一键复制端点与 Token（默认遮罩可点开）、重置单个/全部 Token、**踢下线**、删除设备
   （新增与重置 Token 会**自动写回 config.json 并立即生效**；重置 tunnelToken 后设备需用新 Token 重连）
-- 运行日志：最近 200 条（设备上下线、登录、管理操作）
+- 运行日志：最近 200 条（设备上下线、登录、管理操作），支持自动刷新
 - 安全：登录会话 7 天；连续 5 次密码错误锁定该 IP 10 分钟；Cookie HttpOnly + SameSite=Strict
 
 > 请务必通过 **HTTPS** 访问 /admin；Nginx 已反代整站，`/admin`、`/api/` 自动覆盖，无需额外配置。
+
+### v1.1.0 稳定性升级（建议与设备端模块同步升级）
+
+- **流式转发协议**：设备连接时服务端下发 `hello` 握手，≥ v1.1.0 设备按 64KB 分帧回传
+  （Streamable HTTP GET 长流 / 大响应实时传输，公网不掉线）；旧设备自动降级单帧。
+- **断线快速失败**：设备离线瞬间终结其所有在途请求（502），不再干等 90s 超时。
+- **竞态修复**：超时 / 设备响应 / 断线三方互斥收口，杜绝 `headers already sent` 崩溃。
+- **自定义 Token**：`POST /api/devices` 支持 `tunnelToken` / `clientToken` 可选字段（16-128 位 `[A-Za-z0-9_.\-]`）。
+- **新增 API**：`POST /api/devices/<device>/kick` 踢下线（设备端会自动重连）。
+
+> 升级方式：上传本目录新文件覆盖旧目录（server.js / admin.html），`pm2 restart ksu-mcp-tunnel` 即完成；
+> config.json 无需改动，旧配置继续生效。
 
 ## 一、宝塔面板部署（推荐，5 分钟）
 

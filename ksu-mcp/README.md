@@ -11,12 +11,17 @@
 | 组件 | 说明 |
 |---|---|
 | `bin/mcpd` | MCP 服务端二进制（Go 静态，arm64 / arm 双架构，安装时自动保留匹配架构） |
-| `service.sh` | 开机自启（service 阶段，KernelSU 与 Magisk 通用；含隧道自动拉起） |
-| `boot-completed.sh` | 开机完成兜底保活（KernelSU 专用阶段；含隧道保活） |
+| `service.sh` | 开机自启（service 阶段，KernelSU 与 Magisk 通用；统一拉起 watchdog 守护） |
+| `boot-completed.sh` | 开机完成兜底保活（KernelSU 专用阶段；确保 watchdog 运行） |
 | `system/bin/mcpd` | systemless 包装器，安装后可在终端直接执行 `mcpd` |
-| `webroot/index.html` | KernelSU Manager 内嵌 WebUI 控制台（状态 / 启停 / Token / 配置 / 局域网 / 隧道控制 / 日志） |
-| `customize.sh` | 安装脚本：架构检测、配置初始化 |
-| `tunnel-server/` | **Node.js 内网穿透服务端**（部署到公网 VPS，域名 `n.huziyang.top`） |
+| `webroot/index.html` | KernelSU Manager 内嵌 WebUI 控制台（状态 / 启停 / Token / 配置 / 局域网 / 隧道控制 / 日志，全新 UI） |
+| `customize.sh` | 安装脚本：架构检测、配置初始化、立即拉起守护 |
+| `tunnel-server/` | **Node.js 内网穿透服务端**（部署到公网 VPS，域名 `n.huziyang.top`，v1.1.0 支持流式转发） |
+
+> v1.1.0 核心升级：内置 **watchdog 进程守护**——无论从 WebUI、终端还是开机启动，
+> 服务每 10 秒巡检，崩溃/被杀自动拉起，**离开 KernelSU Manager 页面后服务照常后台运行**；
+> 隧道增加 WS 心跳保活与网络切换自动重连；服务端与设备端同时升级后支持**流式转发协议**，
+> MCP 长流与大响应走公网稳定不掉线。
 
 ## 二、安装
 
@@ -33,8 +38,9 @@
 ## 三、快速验证
 
 ```sh
-mcpd status            # 查看运行状态（JSON，含端口 / Token / 隧道段）
+mcpd status            # 查看运行状态（JSON，含端口 / Token / 隧道段 / watchdog / 局域网 IP）
 curl -s http://127.0.0.1:9123/health   # 健康检查（无需鉴权）
+mcpd watchdog-status   # 进程守护状态
 mcpd tunnel-status     # 隧道状态
 ```
 
@@ -120,10 +126,13 @@ mcpd config-set --tunnel-enable true --tunnel-server wss://n.huziyang.top/tunnel
 
 ```sh
 mcpd                        # stdio 模式（默认）
+mcpd watchdog [--detach]    # 启动进程守护（每 10s 巡检，自动拉起/重启 daemon 与隧道）
+mcpd watchdog-stop          # 停止进程守护
+mcpd watchdog-status        # 进程守护状态（JSON）
 mcpd daemon --detach        # Streamable HTTP + SSE 守护进程（后台）
 mcpd daemon --port 9123 --bind 0.0.0.0 --token xxx   # 带参数前台启动（非回环必须带 Token）
-mcpd stop                   # 停止守护进程
-mcpd status                 # 运行状态（JSON）
+mcpd stop                   # 停止全部（tunnel / daemon / watchdog）
+mcpd status                 # 运行状态（JSON，含 watchdog / 局域网 IP）
 mcpd tunnel --server wss://n.huziyang.top/tunnel --device my-phone --token <tunnelToken> --detach
 mcpd tunnel-stop            # 断开隧道
 mcpd tunnel-status          # 隧道状态（JSON）
@@ -132,6 +141,11 @@ mcpd logs [N]               # 查看最近 N 行日志
 mcpd config-set ...         # 见上文
 mcpd init-config            # 初始化配置文件
 ```
+
+> 进程守护说明：watchdog 会持续守护 daemon（/health 探活，连续 3 次失败强杀重启）
+> 与隧道（配置启用即自动拉起）。WebUI「启动」按钮即拉起 watchdog；
+> 开机由 service.sh / boot-completed.sh 在 init 上下文中拉起 watchdog，
+> 因此**关闭 KernelSU Manager、离开 WebUI 页面都不会中断服务**。
 
 ## 八、内网穿透（模块为客户端 + Node.js 服务端）
 
@@ -153,6 +167,11 @@ mcpd init-config            # 初始化配置文件
    ```
 5. 启动：`pm2 start server.js --name ksu-mcp-tunnel && pm2 save`
 6. 配置域名 `n.huziyang.top` 反代到 127.0.0.1:8080（`nginx.conf.sample` 已含 WebSocket Upgrade 必需配置，SSL 用 certbot 签发）。
+
+> v1.1.0 起无需手工编辑 config.json 登记设备：登录管理台 `/admin` 即可添加设备，
+> 支持**自定义 tunnelToken / clientToken**（留空自动生成 48 位随机串），
+> 并提供重置 Token、踢下线、移动端适配的卡片式 UI。**流式转发协议要求设备端与服务端同时升级到 v1.1.0**
+>（旧设备连新服务端仍按单帧协议工作，但大响应/长流会被截断，建议同步升级）。
 
 ### 设备端启用
 
@@ -212,5 +231,6 @@ ksu-mcp/
 - 仅支持 arm64 / arm 设备（x86_64 模拟器需按第九节自行编译）。
 - `screenshot` / `clipboard_get` 依赖系统 `screencap` / `cmd clipboard`，个别 ROM 可能不可用。
 - WebUI 需要新版 KernelSU Manager 支持 WebUI 特性。
-- 隧道单设备单连接：同设备新连接会顶替旧连接（支持断线自动重连，2s 起步指数退避，上限 30s）。
+- 隧道单设备单连接：同设备新连接会顶替旧连接（客户端 20s WS 心跳 + 75s 读超时判死、2s 起步指数退避重连、上限 30s；WiFi/流量切换检测到网卡变化立即强制重连）。
+- 流式转发协议（长流 / 大响应分帧推送）需要服务端 ≥ v1.1.0；旧版服务端降级为单帧转发。
 - Streamable HTTP 会话由设备端维护：`Mcp-Session-Id` 经隧道原样中继，同一会话的多次调用由设备端维持状态。

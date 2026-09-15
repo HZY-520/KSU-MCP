@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	appVersion      = "1.0.0"
+	appVersion      = "1.1.0"
 	serverName      = "ksu-mcpd"
 	protocolVersion = "2025-03-26"
 
@@ -53,6 +53,17 @@ const (
 	defaultTunnelServer = "wss://n.huziyang.top/tunnel"
 	defaultTunnelDevice = "android-device"
 	tunnelReqTimeout    = 90 // 隧道转发本地请求超时（秒）
+
+	// 隧道稳定性相关
+	tunnelPingInterval  = 20 * time.Second // 客户端心跳间隔
+	tunnelReadTimeout   = 75 * time.Second // 三个心跳周期内未收到任何帧即判定连接死亡
+	tunnelStreamTimeout = 30 * time.Minute // GET/SSE 长流请求的本地转发空闲超时
+	tunnelChunkSize     = 64 << 10         // 流式转发分片大小
+	streamSingleShotMax = 256 << 10        // 低于该大小的响应单帧回传（兼容旧版服务端）
+
+	// 进程守护（watchdog）
+	watchdogInterval = 10 * time.Second // 巡检周期
+	watchdogFailMax  = 3                // 连续探活失败次数达阈值后重启 daemon
 )
 
 // ---------- 路径 ----------
@@ -77,6 +88,8 @@ func runtimePath() string       { return filepath.Join(dataDir(), "mcpd.runtime.
 func tunnelPidPath() string     { return filepath.Join(dataDir(), "tunnel.pid") }
 func tunnelLogPath() string     { return filepath.Join(dataDir(), "tunnel.log") }
 func tunnelRuntimePath() string { return filepath.Join(dataDir(), "tunnel.runtime.json") }
+func watchdogPidPath() string   { return filepath.Join(dataDir(), "watchdog.pid") }
+func watchdogLogPath() string   { return filepath.Join(dataDir(), "watchdog.log") }
 func tmpDir() string            { return filepath.Join(dataDir(), "tmp") }
 
 // ---------- 配置 ----------
@@ -158,6 +171,105 @@ func randID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// daemonDisabled 判断用户是否通过 disabled 标记关闭了开机自启：
+//   echo 1 > /data/adb/ksu_mcp/disabled
+func daemonDisabled() bool {
+	b, err := os.ReadFile(filepath.Join(dataDir(), "disabled"))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(b)) == "1"
+}
+
+// tryEscapeCgroup 尽力把自身迁出 Android 应用/ksud 会话的 cgroup：
+// 从 KSU Manager WebUI 通过 ksu 桥启动的进程沿用发起方的 cgroup，
+// 页面离开后可能被按 cgroup 整组回收。迁移到 system-background / uid_0
+// 等持久 cgroup 后即可脱离 Manager 生命周期。写失败静默忽略——
+// 由 service.sh 在开机 init 上下文拉起的 watchdog 天然不受影响，属于兜底。
+func tryEscapeCgroup() {
+	if os.Getuid() != 0 {
+		return
+	}
+	pid := strconv.Itoa(os.Getpid())
+	cands := []string{
+		"/acct/uid_0/tasks",
+		"/dev/cpuset/system-background/tasks",
+		"/dev/cpuset/background/tasks",
+		"/dev/cpuset/restricted/tasks",
+		"/sys/fs/cgroup/cpuset/system-background/tasks",
+		"/sys/fs/cgroup/cpuset/background/tasks",
+		"/sys/fs/cgroup/system-background/tasks",
+		"/sys/fs/cgroup/background/tasks",
+	}
+	for _, p := range cands {
+		f, err := os.OpenFile(p, os.O_WRONLY, 0)
+		if err != nil {
+			continue
+		}
+		if _, err := io.WriteString(f, pid); err != nil {
+			_ = f.Close()
+			continue
+		}
+		_ = f.Close()
+		logf("cgroup 迁移成功: %s", p)
+		return
+	}
+}
+
+// lanIPs 枚举所有启用网卡的 IPv4 地址（供 status / WebUI 展示局域网接入地址）
+func lanIPs() []string {
+	var ips []string
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return ips
+	}
+	for _, ifc := range ifs {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		as, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range as {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip4 := ip.To4(); ip4 != nil {
+				ips = append(ips, ip4.String())
+			}
+		}
+	}
+	sort.Strings(ips)
+	return ips
+}
+
+// versionAtLeast 简易 semver 比较（容忍缺失的次版本号）
+func versionAtLeast(v, min string) bool {
+	parts := func(s string) []int {
+		out := []int{}
+		for _, p := range strings.Split(s, ".") {
+			n, _ := strconv.Atoi(strings.TrimSpace(p))
+			out = append(out, n)
+		}
+		for len(out) < 3 {
+			out = append(out, 0)
+		}
+		return out
+	}
+	a, b := parts(v), parts(min)
+	for i := 0; i < 3; i++ {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return true
 }
 
 // ---------- 日志 ----------
@@ -1134,7 +1246,25 @@ func readPidFile(path string) (int, bool) {
 	if err := syscall.Kill(pid, 0); err != nil {
 		return pid, false
 	}
+	// 僵尸进程（父进程未回收的已死进程）对 kill(pid,0) 仍返回成功：
+	// 必须按死亡处理，否则 watchdog 会把僵尸误判为存活，延误拉起
+	if isZombie(pid) {
+		return pid, false
+	}
 	return pid, true
+}
+
+// isZombie 读取 /proc/<pid>/stat 判断进程是否处于 Z(ombie)/X(dead) 状态
+func isZombie(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false // /proc 不可读时保持原判断（按存活处理）
+	}
+	i := bytes.LastIndexByte(data, ')')
+	if i < 0 || i+2 >= len(data) {
+		return false
+	}
+	return data[i+2] == 'Z' || data[i+2] == 'X'
 }
 
 func readPid() (int, bool) { return readPidFile(pidPath()) }
@@ -1237,6 +1367,8 @@ func cmdDaemon(args []string) int {
 		return 1
 	}
 	defer os.Remove(pidPath())
+	// 尽力从发起端（KSU Manager 桥接会话）的 cgroup 中独立出来
+	tryEscapeCgroup()
 	// 记录实际生效配置，供 status 命令读取真实监听参数
 	if data, err := json.Marshal(cfg); err == nil {
 		_ = os.WriteFile(runtimePath(), data, 0600)
@@ -1253,33 +1385,69 @@ func cmdDaemon(args []string) int {
 		logf("警告: 正在监听 %s（局域网可访问），请确保 Token 强度并定期轮换", cfg.Bind)
 	}
 	httpSrv := &http.Server{
-		Addr:              addr,
-		Handler:           srv.mux(),
+		Addr: addr,
+		Handler: srv.mux(),
+		// 注意：WriteTimeout 必须为 0，否则会掐断 SSE / Streamable HTTP GET 长流
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
-	err = httpSrv.ListenAndServe()
+	// 优雅退出：收到 SIGTERM/SIGINT 时先 Shutdown 让活动连接完成，再清理 pid 文件
+	srvErr := make(chan error, 1)
+	go func() { srvErr <- httpSrv.ListenAndServe() }()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	select {
+	case <-sigCh:
+		logf("收到退出信号，正在优雅关闭")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = httpSrv.Shutdown(ctx)
+		cancel()
+	case err = <-srvErr:
+	}
 	logf("服务已停止: %v", err)
 	return 0
 }
 
-func cmdStop() int {
-	pid, alive := readPid()
-	if !alive {
-		fmt.Println("mcpd 未在运行")
-		return 0
-	}
+// stopPid 通用停止：TERM → 3s 宽限 → KILL，并清理 pid 文件
+func stopPid(pid int, pidFile string) {
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		fmt.Fprintf(os.Stderr, "停止失败: %v\n", err)
-		return 1
+		_ = os.Remove(pidFile)
+		return
 	}
-	for i := 0; i < 50; i++ {
-		if _, ok := readPid(); !ok {
+	for i := 0; i < 30; i++ {
+		if _, ok := readPidFile(pidFile); !ok {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	_ = os.Remove(pidPath())
-	fmt.Printf("mcpd 已停止 (pid %d)\n", pid)
+	if _, ok := readPidFile(pidFile); ok {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		time.Sleep(200 * time.Millisecond)
+	}
+	_ = os.Remove(pidFile)
+}
+
+// cmdStop 停止全部：先隧道（停止转发），再 daemon，最后 watchdog（防止被自动拉起）
+func cmdStop() int {
+	stoppedAny := false
+	if pid, alive := readPidFile(tunnelPidPath()); alive {
+		stopPid(pid, tunnelPidPath())
+		fmt.Printf("tunnel 已停止 (pid %d)\n", pid)
+		stoppedAny = true
+	}
+	if pid, alive := readPid(); alive {
+		stopPid(pid, pidPath())
+		fmt.Printf("mcpd 已停止 (pid %d)\n", pid)
+		stoppedAny = true
+	}
+	if pid, alive := readPidFile(watchdogPidPath()); alive {
+		stopPid(pid, watchdogPidPath())
+		fmt.Printf("watchdog 已停止 (pid %d)\n", pid)
+		stoppedAny = true
+	}
+	if !stoppedAny {
+		fmt.Println("mcpd 服务未在运行")
+	}
 	return 0
 }
 
@@ -1300,6 +1468,12 @@ func cmdStatus() int {
 			}
 		}
 	}
+	watchdogRunning := false
+	watchdogPID := 0
+	if p, ok := readPidFile(watchdogPidPath()); ok {
+		watchdogRunning = true
+		watchdogPID = p
+	}
 	out := map[string]any{
 		"running":      running,
 		"pid":          pid,
@@ -1312,6 +1486,12 @@ func cmdStatus() int {
 		"read_only":    cfg.ReadOnly,
 		"exec_timeout": cfg.ExecTimeout,
 		"allowlist":    cfg.ExecAllowlist,
+		"lan_ips":      lanIPs(),
+		"disabled":     daemonDisabled(),
+		"watchdog": map[string]any{
+			"running": watchdogRunning,
+			"pid":     watchdogPID,
+		},
 		"tunnel": map[string]any{
 			"enabled": cfg.Tunnel.Enabled,
 			"server":  cfg.Tunnel.Server,
@@ -1319,6 +1499,209 @@ func cmdStatus() int {
 		},
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(b))
+	return 0
+}
+
+// ---------- 进程守护（watchdog） ----------
+//
+// 设计目标：无论从 KSU Manager WebUI、终端、还是开机 service.sh 启动，
+// mcpd daemon 与隧道客户端都必须保持后台常驻、异常自动恢复。
+// watchdog 每 10s 巡检：daemon 未运行→拉起；探活连续失败→强杀重启；
+// 隧道配置启用而未运行→拉起。service.sh/boot-completed.sh 在开机
+// init 上下文中启动 watchdog，因此即使 KSU Manager 页面关闭、
+// Manager 进程组被回收也不影响服务。
+
+func cmdWatchdog(args []string) int {
+	detached := false
+	for _, a := range args {
+		if a == "--detach" || a == "--daemonize" {
+			detached = true
+		}
+	}
+
+	// 守护化：setsid 拉起自身后立即返回
+	if detached && os.Getenv("MCPD_WATCHDOG_DETACHED") != "1" {
+		self, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "无法定位自身路径: %v\n", err)
+			return 1
+		}
+		if err := os.MkdirAll(dataDir(), 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "无法创建数据目录: %v\n", err)
+			return 1
+		}
+		logF, err := os.OpenFile(watchdogLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "无法打开日志文件: %v\n", err)
+			return 1
+		}
+		defer logF.Close()
+		child := exec.Command(self, "watchdog")
+		child.Stdout = logF
+		child.Stderr = logF
+		child.Stdin = nil
+		child.Env = append(os.Environ(), "MCPD_WATCHDOG_DETACHED=1")
+		child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := child.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "启动守护进程失败: %v\n", err)
+			return 1
+		}
+		fmt.Printf("mcpd 守护进程已启动 (pid %d)，日志: %s\n", child.Process.Pid, watchdogLogPath())
+		return 0
+	}
+
+	// 已在独立会话中运行：回避 Manager cgroup，并写 pid 文件
+	tryEscapeCgroup()
+	if pid, alive := readPidFile(watchdogPidPath()); alive {
+		fmt.Fprintf(os.Stderr, "watchdog 已在运行 (pid %d)\n", pid)
+		return 0
+	}
+	if err := os.MkdirAll(dataDir(), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "无法创建数据目录: %v\n", err)
+		return 1
+	}
+	if err := os.WriteFile(watchdogPidPath(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "无法写入 pid 文件: %v\n", err)
+		return 1
+	}
+	defer os.Remove(watchdogPidPath())
+
+	logf("watchdog 已启动 (pid %d)，每 %ds 巡检 mcpd daemon 与 tunnel", os.Getpid(), int(watchdogInterval.Seconds()))
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	// 启动即巡检一次，随后按周期执行
+	deadStreak := 0
+	cfg, _ := loadConfig()
+	watchdogTick(cfg, &deadStreak)
+	ticker := time.NewTicker(watchdogInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-sigCh:
+			logf("watchdog 收到退出信号，停止守护")
+			return 0
+		case <-ticker.C:
+			cfg, err := loadConfig()
+			if err != nil {
+				logf("watchdog 读取配置失败: %v", err)
+				continue
+			}
+			watchdogTick(cfg, &deadStreak)
+		}
+	}
+}
+
+func watchdogTick(cfg *Config, deadStreak *int) {
+	if daemonDisabled() {
+		*deadStreak = 0
+		return
+	}
+	ensureDaemon(deadStreak)
+	if cfg.Tunnel.Enabled {
+		ensureTunnel(cfg)
+	}
+}
+
+// ensureDaemon 保证 mcpd daemon 运行并可响应健康检查
+func ensureDaemon(deadStreak *int) {
+	if pid, alive := readPid(); alive {
+		if healthOK() {
+			*deadStreak = 0
+			return
+		}
+		*deadStreak++
+		logf("watchdog: daemon (pid %d) 探活失败 (%d/%d)", pid, *deadStreak, watchdogFailMax)
+		if *deadStreak < watchdogFailMax {
+			return
+		}
+		// 进程活着但服务无响应（卡死）：强杀后走拉起流程
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		time.Sleep(500 * time.Millisecond)
+		_ = os.Remove(pidPath())
+		*deadStreak = 0
+	} else {
+		*deadStreak = 0
+	}
+	spawnDetached([]string{"daemon", "--detach"}, "MCPD_DETACHED=1", logPath(), "拉起 mcpd daemon")
+}
+
+// ensureTunnel 保证隧道客户端运行（须配置完整）
+func ensureTunnel(cfg *Config) {
+	if _, alive := readPidFile(tunnelPidPath()); alive {
+		return
+	}
+	if cfg.Tunnel.Server == "" || cfg.Tunnel.Device == "" || cfg.Tunnel.Token == "" {
+		return
+	}
+	spawnDetached([]string{"tunnel", "--detach"}, "MCPD_TUNNEL_DETACHED=1", tunnelLogPath(), "拉起 tunnel 客户端")
+}
+
+// spawnDetached 以 setsid 独立会话拉起 mcpd 子命令（日志重定向到指定文件）
+func spawnDetached(args []string, envKV, logFile, action string) {
+	self, err := os.Executable()
+	if err != nil {
+		logf("watchdog: %s失败（定位自身路径失败）: %v", action, err)
+		return
+	}
+	logF, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		logF = os.Stderr
+	}
+	child := exec.Command(self, args...)
+	child.Stdout = logF
+	child.Stderr = logF
+	child.Stdin = nil
+	child.Env = append(os.Environ(), envKV)
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := child.Start(); err != nil {
+		logf("watchdog: %s失败: %v", action, err)
+		return
+	}
+	// 异步 Wait 回收子进程退出状态，避免其成为僵尸进程
+	go func() { _ = child.Wait() }()
+	logf("watchdog: %s (pid %d)", action, child.Process.Pid)
+}
+
+// healthOK 通过 /health 探活本地 MCP 服务（读取运行中进程实际端口）
+func healthOK() bool {
+	port := defaultPort
+	if data, err := os.ReadFile(runtimePath()); err == nil {
+		var live Config
+		if json.Unmarshal(data, &live) == nil && live.Port > 0 {
+			port = live.Port
+		}
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", port))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func cmdWatchdogStop() int {
+	pid, alive := readPidFile(watchdogPidPath())
+	if !alive {
+		fmt.Println("watchdog 未在运行")
+		return 0
+	}
+	stopPid(pid, watchdogPidPath())
+	fmt.Printf("watchdog 已停止 (pid %d)\n", pid)
+	return 0
+}
+
+func cmdWatchdogStatus() int {
+	running := false
+	pid := 0
+	if p, ok := readPidFile(watchdogPidPath()); ok {
+		running = true
+		pid = p
+	}
+	b, _ := json.MarshalIndent(map[string]any{"running": running, "pid": pid}, "", "  ")
 	fmt.Println(string(b))
 	return 0
 }
@@ -1334,12 +1717,32 @@ type tunnelRequestMsg struct {
 	Body    string            `json:"body"` // base64
 }
 
+// Fin=true 表示本帧为最后一帧（v1.1.0 流式协议；旧版服务端忽略此字段）
 type tunnelResponseMsg struct {
 	Type    string            `json:"type"`
 	ID      int64             `json:"id"`
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers"`
 	Body    string            `json:"body"` // base64
+	Fin     bool              `json:"fin"`
+}
+
+// 流式转发分片帧（v1.1.0 流式协议）；Done=true 表示传输结束
+type tunnelChunkMsg struct {
+	Type string `json:"type"`
+	ID   int64  `json:"id"`
+	Body string `json:"body,omitempty"` // base64
+	Done bool   `json:"done,omitempty"`
+}
+
+// 隧道转发共用的本地 HTTP 客户端：keep-alive 复用连接，
+// 保证 Streamable HTTP 同一会话的 initialize / GET / 后续 POST 走同一链路
+var tunnelHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		MaxIdleConns:        8,
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     90 * time.Second,
+	},
 }
 
 func cmdTunnel(args []string) int {
@@ -1435,6 +1838,8 @@ func cmdTunnel(args []string) int {
 	defer os.Remove(tunnelPidPath())
 	_ = os.WriteFile(tunnelRuntimePath(), []byte(fmt.Sprintf(`{"server":%q,"device":%q,"ip":%q}`, tc.Server, tc.Device, tc.IP)), 0644)
 	defer os.Remove(tunnelRuntimePath())
+	// 尽力从发起端（KSU Manager 桥接会话）的 cgroup 中独立出来
+	tryEscapeCgroup()
 
 	logf("tunnel 客户端启动: server=%s device=%s ip=%s (pid %d)", tc.Server, tc.Device, tc.IP, os.Getpid())
 	// 优雅退出：收到 SIGTERM/SIGINT 时关闭活动连接并退出
@@ -1453,6 +1858,34 @@ func cmdTunnel(args []string) int {
 		connMu.Unlock()
 		close(stopCh)
 	}()
+
+	// 网络切换检测：网卡/IP 集合变化（WiFi 切换、流量切换、飞行模式恢复）时
+	// 主动断开当前连接触发立即重连，而不是干等心跳超时
+	ifaceWatcherDone := make(chan struct{})
+	defer close(ifaceWatcherDone)
+	go func() {
+		prev := ifaceSig()
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ifaceWatcherDone:
+				return
+			case <-t.C:
+				cur := ifaceSig()
+				if cur != prev {
+					prev = cur
+					logf("检测到网络接口变化，强制重连隧道")
+					connMu.Lock()
+					if active != nil {
+						_ = active.Close()
+					}
+					connMu.Unlock()
+				}
+			}
+		}
+	}()
+
 	backoff := 2
 	for {
 		select {
@@ -1477,7 +1910,9 @@ func cmdTunnel(args []string) int {
 		active = conn
 		connMu.Unlock()
 		backoff = 2
-		err = serveTunnel(conn, cfg, tc)
+		// gorilla/websocket 仅允许单写者：本连接所有写操作经 wm 串行化
+		var wm sync.Mutex
+		err = serveTunnel(conn, cfg, &wm)
 		connMu.Lock()
 		active = nil
 		connMu.Unlock()
@@ -1489,6 +1924,31 @@ func cmdTunnel(args []string) int {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// ifaceSig 生成当前活跃网卡集合的指纹（接口名 + 地址列表），用于网络切换检测
+func ifaceSig() string {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return "err"
+	}
+	strs := []string{}
+	for _, ifc := range ifs {
+		if ifc.Flags&net.FlagUp == 0 {
+			continue
+		}
+		as, err := ifc.Addrs()
+		if err != nil || len(as) == 0 {
+			continue
+		}
+		addr := make([]string, 0, len(as))
+		for _, a := range as {
+			addr = append(addr, a.String())
+		}
+		strs = append(strs, ifc.Name+"="+strings.Join(addr, ","))
+	}
+	sort.Strings(strs)
+	return strings.Join(strs, "|")
 }
 
 func dialTunnel(tc TunnelConfig) (*websocket.Conn, error) {
@@ -1569,25 +2029,76 @@ func androidCACertPool() *x509.CertPool {
 	return pool
 }
 
-func serveTunnel(conn *websocket.Conn, cfg *Config, tc TunnelConfig) error {
+// serveTunnel 在单连接上循环读取服务端转发的请求并分发到独立 goroutine。
+// 所有写操作经 wm 串行化（gorilla/websocket 仅允许一个并发写者）。
+func serveTunnel(conn *websocket.Conn, cfg *Config, wm *sync.Mutex) error {
+	streamOK := false // 服务端版本握手：>=1.1.0 支持流式转发协议
+
+	// 心跳保活：每 20s ping；pong 刷新读超时。
+	// 75s 内未收到任何帧（网络静默断连 / NAT 超时）即判定连接死亡并触发重连。
+	_ = conn.SetReadDeadline(time.Now().Add(tunnelReadTimeout))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(tunnelReadTimeout))
+	})
+	pingDone := make(chan struct{})
+	defer close(pingDone)
+	go func() {
+		t := time.NewTicker(tunnelPingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-pingDone:
+				return
+			case <-t.C:
+				wm.Lock()
+				err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+				wm.Unlock()
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
+
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			return err
 		}
-		var msg tunnelRequestMsg
-		if err := json.Unmarshal(data, &msg); err != nil {
+		var head struct {
+			Type    string `json:"type"`
+			ID      int64  `json:"id"`
+			Version string `json:"version"`
+		}
+		if err := json.Unmarshal(data, &head); err != nil {
 			continue
 		}
-		if msg.Type != "request" {
-			continue
+		switch head.Type {
+		case "hello":
+			// 服务端版本握手：≥1.1.0 支持流式转发协议
+			streamOK = versionAtLeast(head.Version, "1.1.0")
+			logf("tunnel 握手: 服务端版本 %s（流式转发: %v）", head.Version, streamOK)
+		case "request":
+			var msg tunnelRequestMsg
+			if err := json.Unmarshal(data, &msg); err != nil {
+				continue
+			}
+			go handleTunnelRequest(conn, cfg, &msg, wm, streamOK)
 		}
-		go handleTunnelRequest(conn, cfg, &msg)
 	}
 }
 
-func handleTunnelRequest(conn *websocket.Conn, cfg *Config, msg *tunnelRequestMsg) {
-	resp := tunnelResponseMsg{Type: "response", ID: msg.ID, Status: 502, Headers: map[string]string{}, Body: ""}
+// handleTunnelRequest 将一条远端 HTTP 请求转发到本地 MCP 服务并回传响应。
+// v1.1.0 服务端支持流式协议：响应头帧 + 数据分片帧 + 结束帧，
+// 保证 Streamable HTTP GET 长流 / 大响应（截屏等）经隧道稳定传输；
+// 旧版服务端则退化为单帧回传，保证兼容。
+func handleTunnelRequest(conn *websocket.Conn, cfg *Config, msg *tunnelRequestMsg, wm *sync.Mutex, streamOK bool) {
+	fail := func(status int, errmsg string) {
+		body := base64.StdEncoding.EncodeToString([]byte(`{"jsonrpc":"2.0","error":{"code":-32000,"message":"` + errmsg + `"}}`))
+		wm.Lock()
+		_ = conn.WriteJSON(tunnelResponseMsg{Type: "response", ID: msg.ID, Status: status, Headers: map[string]string{"Content-Type": "application/json"}, Body: body, Fin: true})
+		wm.Unlock()
+	}
 
 	body, err := base64.StdEncoding.DecodeString(msg.Body)
 	if err != nil {
@@ -1600,8 +2111,7 @@ func handleTunnelRequest(conn *websocket.Conn, cfg *Config, msg *tunnelRequestMs
 	localURL := fmt.Sprintf("http://127.0.0.1:%d%s", cfg.Port, path)
 	req, err := http.NewRequest(msg.Method, localURL, bytes.NewReader(body))
 	if err != nil {
-		resp.Body = base64.StdEncoding.EncodeToString([]byte(`{"jsonrpc":"2.0","error":{"code":-32000,"message":"device request error"}}`))
-		_ = conn.WriteJSON(resp)
+		fail(502, "device request error")
 		return
 	}
 	for k, v := range msg.Headers {
@@ -1614,27 +2124,80 @@ func handleTunnelRequest(conn *websocket.Conn, cfg *Config, msg *tunnelRequestMs
 	if cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Token)
 	}
-	client := &http.Client{Timeout: tunnelReqTimeout * time.Second}
-	httpResp, err := client.Do(req)
+
+	// GET /mcp 属于长流（SSE 保活），空闲超时放宽到 30 分钟；其余请求 90s
+	timeout := tunnelReqTimeout * time.Second
+	if msg.Method == http.MethodGet {
+		timeout = tunnelStreamTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	httpResp, err := tunnelHTTPClient.Do(req.WithContext(ctx))
 	if err != nil {
-		resp.Body = base64.StdEncoding.EncodeToString([]byte(`{"jsonrpc":"2.0","error":{"code":-32000,"message":"device local server unavailable"}}`))
-		_ = conn.WriteJSON(resp)
+		fail(502, "device local server unavailable")
 		return
 	}
 	defer httpResp.Body.Close()
-	rbody, err := io.ReadAll(io.LimitReader(httpResp.Body, maxBodyBytes))
-	if err != nil {
-		rbody = []byte(`{"jsonrpc":"2.0","error":{"code":-32000,"message":"device local read error"}}`)
-	}
-	resp.Status = httpResp.StatusCode
+
+	headers := map[string]string{}
 	if ct := httpResp.Header.Get("Content-Type"); ct != "" {
-		resp.Headers["Content-Type"] = ct
+		headers["Content-Type"] = ct
 	}
 	if sid := httpResp.Header.Get("Mcp-Session-Id"); sid != "" {
-		resp.Headers["Mcp-Session-Id"] = sid
+		headers["Mcp-Session-Id"] = sid
 	}
-	resp.Body = base64.StdEncoding.EncodeToString(rbody)
-	_ = conn.WriteJSON(resp)
+
+	if msg.Method == http.MethodGet && streamOK {
+		// 流式转发：HTTP 流（SSE / 事件帧）边读边推，远端客户端实时收到数据
+		wm.Lock()
+		_ = conn.WriteJSON(tunnelResponseMsg{Type: "response", ID: msg.ID, Status: httpResp.StatusCode, Headers: headers, Body: "", Fin: false})
+		wm.Unlock()
+		buf := make([]byte, tunnelChunkSize)
+		for {
+			n, rerr := httpResp.Body.Read(buf)
+			if n > 0 {
+				wm.Lock()
+				_ = conn.WriteJSON(tunnelChunkMsg{Type: "chunk", ID: msg.ID, Body: base64.StdEncoding.EncodeToString(buf[:n])})
+				wm.Unlock()
+			}
+			if rerr != nil {
+				wm.Lock()
+				_ = conn.WriteJSON(tunnelChunkMsg{Type: "chunk", ID: msg.ID, Done: true})
+				wm.Unlock()
+				return
+			}
+		}
+	}
+
+	// 有限响应：整体读取（上限 16MB 与本地一致）
+	data, rerr := io.ReadAll(io.LimitReader(httpResp.Body, maxBodyBytes))
+	if rerr != nil && len(data) == 0 {
+		fail(502, "device local read error")
+		return
+	}
+	// 小响应/旧版服务端：单帧回传
+	if !streamOK || len(data) <= streamSingleShotMax {
+		wm.Lock()
+		_ = conn.WriteJSON(tunnelResponseMsg{Type: "response", ID: msg.ID, Status: httpResp.StatusCode, Headers: headers, Body: base64.StdEncoding.EncodeToString(data), Fin: true})
+		wm.Unlock()
+		return
+	}
+	// 大响应：头帧 + 分片 + 结束帧
+	wm.Lock()
+	_ = conn.WriteJSON(tunnelResponseMsg{Type: "response", ID: msg.ID, Status: httpResp.StatusCode, Headers: headers, Body: "", Fin: false})
+	wm.Unlock()
+	for off := 0; off < len(data); off += tunnelChunkSize {
+		end := off + tunnelChunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		wm.Lock()
+		_ = conn.WriteJSON(tunnelChunkMsg{Type: "chunk", ID: msg.ID, Body: base64.StdEncoding.EncodeToString(data[off:end])})
+		wm.Unlock()
+	}
+	wm.Lock()
+	_ = conn.WriteJSON(tunnelChunkMsg{Type: "chunk", ID: msg.ID, Done: true})
+	wm.Unlock()
 }
 
 func cmdTunnelStop() int {
@@ -1855,14 +2418,17 @@ func usage() {
 
 用法:
   mcpd                     以 stdio 模式运行 MCP 服务（默认，供本地客户端/终端）
+  mcpd watchdog [--detach] 启动进程守护（每 10s 巡检，自动拉起/重启 daemon 与隧道）
+  mcpd watchdog-stop       停止进程守护
+  mcpd watchdog-status     查看进程守护状态（JSON）
   mcpd daemon [选项]        以 Streamable HTTP + SSE 模式启动服务
        --port N            监听端口（默认 9123）
        --bind ADDR         监听地址（默认 127.0.0.1；局域网请用 0.0.0.0）
        --token X           设置鉴权 Token（默认读取/生成于配置文件）
        --no-auth           关闭鉴权（仅限本机回环调试）
        --detach            守护化（setsid 后台运行，日志写入 mcpd.log）
-  mcpd stop                停止 daemon
-  mcpd status              查看运行状态（JSON）
+  mcpd stop                停止全部（tunnel / daemon / watchdog）
+  mcpd status              查看运行状态（JSON，含 watchdog / 局域网 IP）
   mcpd tunnel [选项]        启动内网穿透客户端（模块为客户端）
        --server URL        隧道服务端（默认 wss://n.huziyang.top/tunnel）
        --device ID         设备唯一标识
@@ -1889,6 +2455,12 @@ func main() {
 		switch args[0] {
 		case "daemon", "serve":
 			os.Exit(cmdDaemon(args[1:]))
+		case "watchdog":
+			os.Exit(cmdWatchdog(args[1:]))
+		case "watchdog-stop":
+			os.Exit(cmdWatchdogStop())
+		case "watchdog-status":
+			os.Exit(cmdWatchdogStatus())
 		case "stop":
 			os.Exit(cmdStop())
 		case "status":

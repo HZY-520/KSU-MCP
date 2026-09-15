@@ -1,8 +1,16 @@
 #!/usr/bin/env node
 /**
- * KSU MCP Tunnel Server
+ * KSU MCP Tunnel Server v1.1.0
  * 内网穿透服务端：设备（模块端 mcpd tunnel）主动连接本服务，远端 MCP 客户端
- * 通过 https://n.huziyang.top/mcp/<device> 访问设备上的 MCP 服务。
+ * 通过 https://<域名>/mcp/<device> 访问设备上的 MCP 服务。
+ *
+ * v1.1.0 变更：
+ *  - 流式转发协议（hello 握手 + response(fin) + chunk 分片）：
+ *    Streamable HTTP GET 长流 / 大响应（截屏等）经隧道实时传输，公网不掉线；
+ *  - 设备断线快速失败：500ms 内使该设备所有在途请求返回 502，不再干等超时；
+ *  - 响应竞态修复：超时 / 设备响应 / 断线 三方互斥收口，杜绝 headers already sent 崩溃；
+ *  - WebUI 添加设备支持自定义 tunnelToken / clientToken；
+ *  - 新增 POST /api/devices/<id>/kick 踢下线接口。
  *
  * 运行：npm install && node server.js（或 pm2 start server.js --name ksu-mcp-tunnel）
  * 配置：config.json（见 config.example.json）；也可用环境变量 TUNNEL_CONFIG 指定路径
@@ -17,8 +25,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
-const VERSION = "1.0.0";
+const VERSION = '1.1.0';
 const APP_NAME = 'KSU MCP Tunnel Server';
+const MAX_PROXY_BODY = 16 * 1024 * 1024; // 代理请求体上限（与设备端一致）
+const TOKEN_RE = /^[A-Za-z0-9_.\-]{16,128}$/; // 自定义 Token 规则（留空则自动生成）
 
 // ---------------- 配置 ----------------
 const CONFIG_PATH = process.env.TUNNEL_CONFIG || path.join(__dirname, 'config.json');
@@ -32,7 +42,7 @@ function loadConfig() {
     tls: { cert: '', key: '' },
     tunnelPath: '/tunnel',   // 设备 WebSocket 接入路径
     mcpPath: '/mcp',         // 远端 MCP 客户端访问前缀
-    requestTimeout: 90000,   // 转发请求超时（毫秒）
+    requestTimeout: 90000,   // 转发请求空闲超时（毫秒，每次数据分片重置）
     devices: {},             // deviceId -> { tunnelToken, clientToken }
     admin: { username: 'admin', password: sha256('admin123') }, // WebUI 登录（首次登录后请修改）
   };
@@ -68,7 +78,7 @@ function saveConfig() {
 
 // ---------------- 状态 ----------------
 const deviceSockets = new Map(); // deviceId -> ws
-const pending = new Map();       // reqId -> { done, timer, device }
+const pending = new Map();       // reqId -> { id, device, res, timer, started, settled }
 let reqSeq = 0;
 const stats = { requests: 0, failures: 0, startedAt: Date.now() };
 const logRing = [];
@@ -78,6 +88,58 @@ function log(...a) {
   console.log(...a);
   logRing.push(line);
   if (logRing.length > MAX_LOG) logRing.shift();
+}
+
+// ---------------- 在途请求管理（统一收口，杜绝重复响应） ----------------
+function errJSON(code, message) {
+  return JSON.stringify({ jsonrpc: '2.0', error: { code, message } });
+}
+
+function armTimer(p) {
+  clearTimeout(p.timer);
+  p.timer = setTimeout(() => idleTimeout(p), CONFIG.requestTimeout || 90000);
+}
+
+function idleTimeout(p) {
+  if (p.settled) return;
+  p.settled = true;
+  pending.delete(p.id);
+  stats.failures += 1;
+  try {
+    if (!p.started) {
+      respond(p.res, 504, errJSON(-32000, 'device timeout'), { 'Content-Type': 'application/json' });
+    } else if (!p.res.writableEnded) {
+      p.res.end();
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function failPending(p, status, msg) {
+  if (p.settled) return;
+  p.settled = true;
+  clearTimeout(p.timer);
+  pending.delete(p.id);
+  stats.failures += 1;
+  try {
+    if (!p.started) {
+      respond(p.res, status, errJSON(-32000, msg), { 'Content-Type': 'application/json' });
+    } else if (!p.res.writableEnded) {
+      p.res.end();
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function finishPending(p) {
+  if (p.settled) return;
+  p.settled = true;
+  clearTimeout(p.timer);
+  pending.delete(p.id);
+  try { if (!p.res.writableEnded) p.res.end(); } catch (e) { /* ignore */ }
+}
+
+function decodeBody(s) {
+  if (!s) return Buffer.alloc(0);
+  try { return Buffer.from(s, 'base64'); } catch (e) { return Buffer.alloc(0); }
 }
 
 // ---------------- WebSocket：设备接入 ----------------
@@ -105,21 +167,52 @@ wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
+  // 版本握手：告知设备端本服务支持流式转发协议（>=1.1.0）
+  try { ws.send(JSON.stringify({ type: 'hello', version: VERSION })); } catch (e) { /* ignore */ }
+
   ws.on('message', (data) => {
     let msg;
     try { msg = JSON.parse(data.toString()); } catch (e) { return; }
-    if (msg && msg.type === 'response' && msg.id !== undefined) {
-      const p = pending.get(msg.id);
-      if (p) {
-        clearTimeout(p.timer);
-        pending.delete(msg.id);
-        p.done(msg);
-      }
+    if (!msg || msg.id === undefined) return;
+    const p = pending.get(msg.id);
+    if (!p || p.settled) return;
+
+    if (msg.type === 'response') {
+      if (p.started) return; // 重复头帧，忽略
+      p.started = true;
+      armTimer(p);
+      const headers = {};
+      const hs = msg.headers || {};
+      const get = (k) => {
+        for (const key of Object.keys(hs)) if (key.toLowerCase() === k) return hs[key];
+        return undefined;
+      };
+      const ct = get('content-type');
+      const sid = get('mcp-session-id');
+      if (ct) headers['Content-Type'] = ct;
+      if (sid) headers['Mcp-Session-Id'] = sid;
+      p.res.writeHead(msg.status || 502, headers);
+      const body = decodeBody(msg.body);
+      if (body.length && !p.res.writableEnded) p.res.write(body);
+      if (msg.fin === true) finishPending(p); // 单帧响应（fin=true）直接结束
+      return;
+    }
+
+    if (msg.type === 'chunk') {
+      if (!p.started) return; // 无响应头的孤儿分片，安全忽略
+      armTimer(p);
+      const body = decodeBody(msg.body);
+      if (body.length && !p.res.writableEnded) p.res.write(body);
+      if (msg.done === true) finishPending(p);
     }
   });
 
   ws.on('close', () => {
     if (deviceSockets.get(device) === ws) deviceSockets.delete(device);
+    // 断线快速失败：立即终结该设备所有在途请求
+    for (const [, p] of pending) {
+      if (p.device === device) failPending(p, 502, 'device offline');
+    }
     log('设备离线:', device);
   });
   ws.on('error', () => { /* ignore */ });
@@ -209,6 +302,7 @@ function readBody(req) {
 function respond(res, status, body, headers) {
   const h = Object.assign({ 'Content-Type': 'application/json' }, headers);
   if (typeof body !== 'string') body = JSON.stringify(body);
+  if (res.writableEnded) return;
   res.writeHead(status, h);
   res.end(body);
 }
@@ -227,7 +321,12 @@ function kickDevice(device, code, reason) {
   if (ws) { try { ws.close(code, reason); } catch (e) { /* ignore */ } }
 }
 
-function genDeviceTokens() { return { tunnelToken: randHex(24), clientToken: randHex(24) }; }
+function validateCustomToken(key, v) {
+  if (v && !TOKEN_RE.test(v)) {
+    return key + ' 需为 16-128 位字母/数字/._- 字符（或留空自动生成）';
+  }
+  return null;
+}
 
 // ---------------- API 路由 ----------------
 async function handleAPI(req, res, u) {
@@ -284,6 +383,7 @@ async function handleAPI(req, res, u) {
       version: VERSION,
       port: CONFIG.port,
       tls: useTLS,
+      mcpPath: CONFIG.mcpPath,
       uptime: Date.now() - stats.startedAt,
       stats: {
         requests: stats.requests,
@@ -296,7 +396,7 @@ async function handleAPI(req, res, u) {
     return;
   }
 
-  // 添加设备
+  // 添加设备（支持自定义 tunnelToken / clientToken，留空自动生成）
   if (p === '/api/devices' && req.method === 'POST') {
     let body;
     try { body = await readBody(req); } catch (e) { respond(res, 400, { ok: false, error: '参数错误' }); return; }
@@ -304,10 +404,20 @@ async function handleAPI(req, res, u) {
     if (!device) { respond(res, 400, { ok: false, error: '设备名不能为空' }); return; }
     if (!/^[A-Za-z0-9_.-]{1,64}$/.test(device)) { respond(res, 400, { ok: false, error: '设备名仅允许字母数字 . _ -，最长 64 字符' }); return; }
     if (CONFIG.devices[device]) { respond(res, 409, { ok: false, error: '设备已存在' }); return; }
-    CONFIG.devices[device] = genDeviceTokens();
+    const tunnelToken = body.tunnelToken !== undefined && body.tunnelToken !== null ? String(body.tunnelToken).trim() : '';
+    const clientToken = body.clientToken !== undefined && body.clientToken !== null ? String(body.clientToken).trim() : '';
+    const errT = validateCustomToken('tunnelToken', tunnelToken);
+    if (errT) { respond(res, 400, { ok: false, error: errT }); return; }
+    const errC = validateCustomToken('clientToken', clientToken);
+    if (errC) { respond(res, 400, { ok: false, error: errC }); return; }
+    const tokens = {
+      tunnelToken: tunnelToken || randHex(24),
+      clientToken: clientToken || randHex(24),
+    };
+    CONFIG.devices[device] = tokens;
     saveConfig();
     log('WebUI 新增设备:', device);
-    respond(res, 200, { ok: true, device: device, tokens: CONFIG.devices[device] });
+    respond(res, 200, { ok: true, device: device, tokens });
     return;
   }
 
@@ -320,6 +430,17 @@ async function handleAPI(req, res, u) {
     kickDevice(device, 4003, 'removed');
     saveConfig();
     log('WebUI 删除设备:', device);
+    respond(res, 200, { ok: true });
+    return;
+  }
+
+  // 踢下线
+  const kickMatch = p.match(/^\/api\/devices\/([^/]+)\/kick$/);
+  if (kickMatch && req.method === 'POST') {
+    const device = decodeURIComponent(kickMatch[1]);
+    if (!CONFIG.devices[device]) { respond(res, 404, { ok: false, error: '设备不存在' }); return; }
+    kickDevice(device, 4000, 'kicked by admin');
+    log('WebUI 踢下线设备:', device);
     respond(res, 200, { ok: true });
     return;
   }
@@ -407,7 +528,7 @@ server.on('request', (req, res) => {
 
     const dev = CONFIG.devices[device];
     if (!dev) {
-      respond(res, 404, JSON.stringify({ jsonrpc: '2.0', error: { code: -32002, message: 'device not found' } }));
+      respond(res, 404, errJSON(-32002, 'device not found'));
       return;
     }
     if (!authOK(req, device)) {
@@ -418,15 +539,28 @@ server.on('request', (req, res) => {
     const ws = deviceSockets.get(device);
     if (!ws || ws.readyState !== 1) {
       stats.failures += 1;
-      respond(res, 502, JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'device offline' } }));
+      respond(res, 502, errJSON(-32000, 'device offline'));
       return;
     }
 
     stats.requests += 1;
-    let chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    const chunks = [];
+    let size = 0;
+    let rejected = false;
+    req.on('data', (c) => {
+      if (rejected) return;
+      size += c.length;
+      if (size > MAX_PROXY_BODY) {
+        rejected = true;
+        stats.failures += 1;
+        respond(res, 413, errJSON(-32000, 'request body too large'));
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('error', () => { /* ignore */ });
     req.on('end', () => {
+      if (rejected) return;
       const id = ++reqSeq;
       const msg = {
         type: 'request',
@@ -436,46 +570,16 @@ server.on('request', (req, res) => {
         headers: pickHeaders(req.headers),
         body: Buffer.concat(chunks).toString('base64'),
       };
-      // 设备响应到达后：回写状态、必要响应头、原文 body（头键名大小写不敏感）
-      const done = (rmsg) => {
-        const headers = {};
-        const hs = rmsg.headers || {};
-        const get = (k) => {
-          for (const key of Object.keys(hs)) {
-            if (key.toLowerCase() === k) return hs[key];
-          }
-          return undefined;
-        };
-        const ct = get('content-type');
-        const sid = get('mcp-session-id');
-        if (ct) headers['Content-Type'] = ct;
-        if (sid) headers['Mcp-Session-Id'] = sid;
-        let body = Buffer.alloc(0);
-        try { body = Buffer.from(rmsg.body || '', 'base64'); } catch (e) { /* ignore */ }
-        res.writeHead(rmsg.status || 502, headers);
-        res.end(body);
-      };
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        stats.failures += 1;
-        respond(res, 504, JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'device timeout' } }));
-      }, CONFIG.requestTimeout || 90000);
-
-      pending.set(id, { done, timer, device });
+      // 注册在途请求：空闲超时（每次分片重置）+ settled 互斥收口
+      const p = { id, device, res, started: false, settled: false, timer: null };
+      pending.set(id, p);
+      armTimer(p);
       try {
         ws.send(JSON.stringify(msg), (err) => {
-          if (err) {
-            clearTimeout(timer);
-            pending.delete(id);
-            stats.failures += 1;
-            respond(res, 502, JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'device send failed' } }));
-          }
+          if (err) failPending(p, 502, 'device send failed');
         });
       } catch (e) {
-        clearTimeout(timer);
-        pending.delete(id);
-        stats.failures += 1;
-        respond(res, 502, JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'device offline' } }));
+        failPending(p, 502, 'device offline');
       }
     });
     return;

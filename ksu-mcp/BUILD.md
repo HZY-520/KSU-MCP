@@ -1,11 +1,24 @@
 # KSU MCP 全栈源码包 · 构建说明
 
-本包为 **KSU MCP Server v1.0.0 全栈**源码：手机端 KernelSU/Magisk 模块（Go）+ 公网穿透服务端（Node.js）。
+本包为 **KSU MCP Server v1.1.0 全栈**源码：手机端 KernelSU/Magisk 模块（Go）+ 公网穿透服务端（Node.js）。
+
+## v1.1.0 相对 v1.0.x 的变更速览
+
+- **进程守护（watchdog）**：`mcpd watchdog [--detach]` 每 10s 巡检，daemon 崩溃/被杀自动拉起（/health 探活，
+  连续 3 次失败强杀重启），隧道配置启用即保活；service.sh / boot-completed.sh 在 init 上下文拉起 watchdog，
+  **关闭 KSU Manager / 离开 WebUI 后服务不中断**。`mcpd stop` 改为停止全部（tunnel / daemon / watchdog）。
+- **隧道稳定性**：20s WS 心跳 + 75s 读超时判死；网卡变化（WiFi/流量切换）强制重连；
+  写操作互斥锁修复并发写 WS 的掉线问题；GET/SSE 长流空闲超时放宽至 30 分钟。
+- **流式转发协议**：服务端 ≥ v1.1.0 时握手协商（`hello` 帧），大响应/长流按 64KB 分帧
+  （`response(fin)` + `chunk`），旧版服务端自动降级单帧；设备断线时服务端 500ms 内快速失败在途请求。
+- **服务端管理台**：/admin 全新 UI（移动端适配），添加设备支持**自定义 tunnelToken / clientToken**，
+  新增踢下线 API；修复响应超时/断线双写崩溃竞态。
+- **WebUI 重构**：设备端控制台与服务端管理台均换新（卡片式、分段标签、开关、涟漪/脉冲/渐入动画）。
 
 ## 目录结构
 
 ```
-ksu-mcp-src-v1.0.0/
+ksu-mcp-src-v1.1.0/
 ├── README.md                  # 模块总说明（功能 / 安装 / 使用）
 ├── BUILD.md                   # 本文件：构建与打包
 ├── docs/architecture.html     # 系统架构图（浏览器打开）
@@ -47,7 +60,7 @@ chmod 755 ../module/bin/arm64/mcpd ../module/bin/arm/mcpd
 cd ..
 
 # 2. 打包模块（customize.sh 安装时会把对应架构二进制移到 bin/mcpd）
-cd module && zip -r ../ksu-mcp-server-v1.0.0.zip . -x "*.DS_Store" && cd ..
+cd module && zip -r ../ksu-mcp-server-v1.1.0.zip . -x "*.DS_Store" && cd ..
 ```
 
 编译要点：

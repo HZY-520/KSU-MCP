@@ -23,7 +23,7 @@ if ! command -v abort >/dev/null 2>&1; then
 fi
 
 ui_print "*******************************"
-ui_print "  KSU MCP Server v1.0.0"
+ui_print "  KSU MCP Server v1.1.0"
 ui_print "*******************************"
 
 # 1. 检测 CPU 架构，保留对应二进制
@@ -61,6 +61,12 @@ if [ ! -f "$DATA_DIR/config.json" ]; then
 else
     ui_print "- 保留已有配置: $DATA_DIR/config.json"
 fi
+
+# 尝试立即拉起进程守护（部分环境安装后不会马上执行 service.sh，
+# 这里直接启动 watchdog，由它负责 daemon 与隧道的拉起与保活）
+"$MODDIR/bin/mcpd" watchdog --detach >/dev/null 2>&1 \
+    && ui_print "- 进程守护已启动（每 10s 巡检 daemon 与隧道）" \
+    || ui_print "- 进程守护将在下次开机/WebUI 操作时启动"
 
 ui_print "- 安装完成，重启或打开 KernelSU 管理器中的 WebUI 生效"
 exit 0
