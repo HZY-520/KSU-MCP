@@ -1,0 +1,53 @@
+{
+  "name": "ksu-mcp",
+  "version": "1.3.0",
+  "title": "KSU MCP Server 操控技能",
+  "description": "通过 KSU MCP Server 操控已 root 的 Android 设备。内置成本模型、决策树与调用配方，指导 AI 用最少 token、最短耗时完成任务：界面识别优先用控件树结构化数据（android_get_screen_elements / android_tap_element），而不是截图估坐标。",
+  "entry": "SKILL.md",
+  "format": "markdown-with-yaml-frontmatter",
+  "files": [
+    "SKILL.md",
+    "reference/tools-quickref.md",
+    "reference/ui-recipes.md",
+    "reference/troubleshooting.md",
+    "examples/end-to-end.md",
+    "skill.json"
+  ],
+  "triggers": [
+    "操作手机", "看看手机屏幕", "点一下手机上的按钮", "在手机上输入",
+    "发微信", "手机电量", "手机存储", "手机应用列表", "手机日志",
+    "Android 设备操作", "root 手机", "KernelSU", "KSU MCP"
+  ],
+  "requires": {
+    "mcp_server": {
+      "name": "ksu-mcp",
+      "transport": "streamable-http",
+      "auth": "Bearer <Token>",
+      "endpoints": {
+        "local": "http://127.0.0.1:9123/mcp",
+        "lan": "http://<device-lan-ip>:9123/mcp",
+        "public": "https://<tunnel-domain>/mcp/<device-name>"
+      },
+      "protocol_version": "2025-11-25",
+      "min_server_version": "1.3.0"
+    },
+    "device_module": {
+      "name": "ksu-mcp-server",
+      "min_version": "1.3.0",
+      "note": "手机端需安装 KernelSU/Magisk 模块 zip 并授予 root"
+    }
+  },
+  "install": {
+    "claude_code": "把本目录复制到 ~/.claude/skills/ksu-mcp/",
+    "dsh": "把本目录复制到 ~/.dsh/skills/ksu-mcp/",
+    "generic": "把本目录整体放入客户端的 skills 目录，保持 SKILL.md 在根、reference/ 与 examples/ 子目录不变；不支持目录式技能的客户端可把 SKILL.md 全文粘进系统提示"
+  },
+  "highlights": [
+    "成本模型：8 档工具按耗时与 token 排序，明确「什么时候不该用截图」",
+    "决策树：从「看屏幕」到「点/输入/滚动/等待」的 8 条分支",
+    "七种界面自动化剧本 + 选择器稳定性排序（id > desc > text > 坐标）",
+    "大输出工具的参数纪律（分页/过滤/行数上限），避免上下文被撑爆",
+    "错误处理清单：idle state、元素被遮挡、verify=false、隧道离线等 20+ 场景",
+    "端到端示例：发微信、状态巡检，含每步成本理由"
+  ]
+}
