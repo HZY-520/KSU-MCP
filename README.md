@@ -4,11 +4,41 @@
 开机自启、进程守护、WebUI 控制台、**Streamable HTTP（新版协议）+ SSE 双传输**、**局域网访问**、**内网穿透（设备为隧道客户端，配合 Node.js 服务端）**，
 让 Cherry Studio / ChatBox / Claude 等 MCP 客户端在**任何网络环境**下调用设备能力（root shell、文件、系统信息、屏幕与输入注入等）。
 
-> **当前版本：v1.2.1** · 协议：MCP **2025-11-25**（兼容 2025-06-18 / 2025-03-26 / 2024-11-05）· 工具：**32 个**（21 个规范命名 + 11 个弃用别名）
+> **当前版本：v1.3.0** · 协议：MCP **2025-11-25**（兼容 2025-06-18 / 2025-03-26 / 2024-11-05）· 工具：**40 个**（29 个规范命名 + 11 个弃用别名）
+>
+> **v1.3.0 新增：屏幕控件树工具（用结构化数据替代截图做界面识别）+ [AI 技能包](#十七ai-技能包skills)。**
+> 想让 AI 自己装好这一切？直接用 [「一键安装提示词」](#十八一键安装提示词复制给-ai)。
 
 ---
 
-## 一、v1.2.1 补丁说明
+## 一、版本变更速览
+
+### 1.1 v1.3.0（当前版本）
+
+**新增 8 个屏幕控件树工具**——用**结构化数据替代截图**做界面识别。原有的
+`android_screenshot` / `screenshot` **完全未改动**，两者是互补关系：
+
+| 新工具 | 用途 |
+|---|---|
+| `android_get_screen_elements` | **界面识别首选**：一次性返回屏幕上所有可点/可输入元素的文本、资源 id、类名与**精确中心坐标**（1~3KB JSON，替代一张上千 token 的截图） |
+| `android_find_element` | 按选择器精确查找（文本/id/描述/类名/可点/可输入/已勾选/禁用…），看是否存在、有几个 |
+| `android_tap_element` | **按选择器一次点击**（自动取中心坐标），把「查找+算坐标+点击」合并为一次调用 |
+| `android_set_element_text` | **按选择器写入文本**（自动聚焦 → 清空 → 输入 → 读回校验） |
+| `android_wait_for_element` | 等待控件出现/消失（在设备端轮询，AI 不必反复 sleep + 截图） |
+| `android_scroll_to_element` | 沿指定方向反复滚动并查找控件，直到找到（长列表利器） |
+| `android_dump_ui_hierarchy` | 导出完整控件树（JSON 嵌套树或原始 XML），仅在紧凑视图解释不了时使用 |
+| `android_get_foreground_app` | 当前前台应用包名与 Activity（一次 dumpsys，最省） |
+
+底层实现：读取 Android `uiautomator` 控件树 XML → 解析展平 → 计算 `label`（自身或子孙文本，
+让可点击容器也能被文本定位）→ 去重冗余节点 → 输出带 `center` 坐标的紧凑 JSON。
+针对 `could not get idle state` 做了重试 + `--compressed` 回退，并带 **2 秒内存缓存**
+（`get_screen_elements` → `find` → `tap` 只 dump 一次，省 0.3~1.5s）。
+
+**新增 [AI 技能包](#十七ai-技能包skills)**：教 AI 怎么调用最省时省 token——
+含成本模型（8 档工具排序）、决策树、选择器稳定性排序、大输出工具的参纪纪律、
+20+ 场景排障清单与端到端示例。技能包已单独打包进 Release（`ksu-mcp-skills-v1.3.0.zip`）。
+
+### 1.2 v1.2.1 补丁说明
 
 v1.2.1 修复 v1.2.0 的两个缺陷，功能与工具集不变（**建议 v1.2.0 用户升级**）：
 
@@ -36,7 +66,7 @@ v1.2.1 修复 v1.2.0 的两个缺陷，功能与工具集不变（**建议 v1.2.
 
 > v1.2.0 的 tag 与 Release 保留不动以便追溯，建议直接使用 v1.2.1。
 
-## 二、v1.2.0 变更速览
+### 1.3 v1.2.0 变更速览
 
 | 方向 | 变更 |
 |---|---|
@@ -106,9 +136,9 @@ mcpd tunnel-status     # 隧道状态（JSON：连接态/延迟/重连次数/流
 /data/adb/modules/ksu_mcp/bin/mcpd
 ```
 
-## 七、内置工具（32 个）
+## 七、内置工具（40 个）
 
-### 7.1 规范命名工具（21 个，推荐使用）
+### 7.1 规范命名工具（29 个，推荐使用）
 
 命名遵循 MCP 2025-11-25 规范的 `{service}_{action}_{resource}` 三段式，`service` 固定为 `android`。
 
@@ -127,11 +157,24 @@ mcpd tunnel-status     # 隧道状态（JSON：连接态/延迟/重连次数/流
 | `android_get_setting` | 读取 10 类系统设置的当前值（与 `android_toggle_setting` 同一套键名） |
 | `android_get_clipboard` | 读取剪贴板文本 |
 
-**界面与输入**
+**屏幕控件树（v1.3.0 新增，界面识别的首选）**
 
 | 工具 | 说明 |
 |---|---|
-| `android_screenshot` | 截屏并返回 **MCP `image` 内容块**（PNG）+ 保存路径元信息；支持 `display_id`；设备上最多保留 5 张 |
+| `android_get_screen_elements` | **结构化屏幕识别**：元素文本/资源 id/类名/可见描述 + 精确中心坐标；支持 `filter`、`max_elements`、`include_bounds`、`fresh` |
+| `android_find_element` | 按选择器查找（文本/id/desc/类名/可点/可输入/已勾选/禁用/ref），返回匹配数与坐标 |
+| `android_tap_element` | 按选择器**一次点击**（自动取中心），支持 `match_index`、`wait_ms`、`verify` 复核 |
+| `android_set_element_text` | 按选择器写入文本：自动聚焦 → 移到行尾 → 清空 → 输入 → **读回校验** |
+| `android_wait_for_element` | 等待控件出现/消失（设备端轮询，`state`=present/absent） |
+| `android_scroll_to_element` | 按方向反复滚动查找控件，直到找到或达 `max_scrolls` |
+| `android_dump_ui_hierarchy` | 完整控件树（`format`=json 嵌套树 / xml 原文），仅疑难时用（输出 10~80KB） |
+| `android_get_foreground_app` | 当前前台应用包名与 Activity（最省的一次调用） |
+
+**界面与输入（会改变设备状态）**
+
+| 工具 | 说明 |
+|---|---|
+| `android_screenshot` | 截屏并返回 **MCP `image` 内容块**（PNG）+ 保存路径元信息；支持 `display_id`；设备上最多保留 5 张。**仅在需要看像素（图片/图表/渲染异常/控件树查不到）时使用**；做界面识别请用上面的控件树工具 |
 | `android_input_text` | 向当前焦点输入框注入文本（直接 exec 单参数，不经 shell，引号/分号安全） |
 | `android_input_key` | 注入按键（HOME / BACK / ENTER / POWER 等） |
 | `android_input_tap` | 按坐标点击 |
@@ -367,6 +410,9 @@ ksu-mcp/
 │   ├── admin.html              #   管理台页面（/admin）
 │   ├── nginx.conf.sample       #   Nginx 反代 + WebSocket Upgrade 示例
 │   └── README.md               #   部署手册
+├── skills/                     # 【AI 技能包】教 AI 怎么调用最省时省 token
+│   ├── README.md               #   索引与安装说明
+│   └── ksu-mcp/                #   技能本体（SKILL.md + reference/ + examples/ + skill.json）
 ├── tests/                      # 自动化测试（e2e / tunnel e2e / webui / soak + fakebin）
 └── docs/
     ├── analysis-and-diagnosis.md   # 现状分析与六大问题根因诊断报告
@@ -444,3 +490,108 @@ ksu-mcp/
 - 任务 3.1 提到「对大体积静态资源启用缓存策略」。WebUI 是**单个自包含 HTML**
   （CSS/JS 全部内联，无外部字体、图片、脚本，零外部请求），因此不存在需要缓存策略的
   大体积静态资源；且文件由 KernelSU 从模块目录直接读取，HTTP 缓存头也非模块可控。
+
+## 十七、AI 技能包（Skills）
+
+工具多（40 个）不代表 AI 会用得好。技能包解决的问题是：**告诉 AI 按什么顺序、用什么姿势调用最省时最省 token。**
+完整内容见 [`skills/`](skills/)；技能包也单独打包在 Release 里（`ksu-mcp-skills-v1.3.0.zip`）。
+
+### 17.1 它教了 AI 什么
+
+| 能力 | 说明 |
+|---|---|
+| **成本模型** | 40 个工具按「耗时 + 上下文开销」分 8 档排序，明确**界面识别优先控件树、而不是截图**（截图一张上千 token 且要目测坐标） |
+| **决策树** | 从「看屏幕」到「点击/输入/滚动/等待」的 8 条分支，照着走不会选错工具 |
+| **五条硬规则** | 先控件树后截图 · 不要两者都调 · 不要拆成两步 · 不要 sleep 猜加载 · 不要凭坐标硬点 |
+| **缓存复用** | 控件树 2 秒缓存：`get_screen_elements` → `find_element` → `tap_element(ref=)` 只 dump 一次 |
+| **参数纪律** | 日志要 tag/行数、包列表要分页、进程要过滤，避免上下文被撑爆 |
+| **选择器稳定性排序** | `id` > `id_contains` > `desc` > `text` > `text_contains` > `class_contains` > 坐标 |
+| **排障清单** | `could not get idle state`、点了没反应、`verified=false`、隧道 `device offline` 等 20+ 场景 |
+| **安全边界** | `read_only` / `exec_allowlist` 闸门表现与处置；破坏性命令先问用户 |
+
+### 17.2 技能包结构
+
+```
+skills/
+├── README.md                       # 索引与三种安装方式
+└── ksu-mcp/
+    ├── SKILL.md                    # 主技能（成本模型 + 决策树 + 配方 + 安全边界）
+    ├── skill.json                  # 机器可读清单（版本/依赖/触发词/各客户端安装路径）
+    ├── reference/tools-quickref.md # 40 个工具速查（含省 token 的调法）
+    ├── reference/ui-recipes.md     # 界面自动化剧本 + 选择器排序
+    ├── reference/troubleshooting.md# 排障清单
+    └── examples/end-to-end.md      # 端到端示例（含每步成本理由）+ 反例清单
+```
+
+### 17.3 安装
+
+```bash
+# 从 Release 下载
+curl -LO https://github.com/HZY-520/KSU-MCP/releases/latest/download/ksu-mcp-skills-v1.3.0.zip
+unzip -o ksu-mcp-skills-v1.3.0.zip -d /tmp/ksu-skills
+# 放进客户端 skills 目录（按你的客户端选一个）
+mkdir -p ~/.claude/skills && cp -r /tmp/ksu-skills/ksu-mcp ~/.claude/skills/   # Claude Code
+mkdir -p ~/.dsh/skills    && cp -r /tmp/ksu-skills/ksu-mcp ~/.dsh/skills/      # DeepSeek Harness
+```
+
+> 不支持目录式技能的客户端：把 `ksu-mcp/SKILL.md` 全文粘进系统提示即可。
+> 技能是可选的「说明书」——不装也能用 MCP，只是 AI 容易走「截图 + 估坐标」的费钱路线。
+
+---
+
+## 十八、一键安装提示词（复制给 AI）
+
+把下面整段复制给你的 AI 助手（Claude Code / Cursor / DeepSeek Harness / 任意支持 MCP 的 Agent），
+它会自己下载技能包、装进自己的 skills 目录，并引导你完成手机端与连接配置。
+
+````text
+请帮我装好 KSU MCP Server，并把这套 MCP 的使用技能装到你自己的 skills 里，之后你就能直接操作我的 Android 手机。
+
+项目地址：https://github.com/HZY-520/KSU-MCP
+最新 Release：https://github.com/HZY-520/KSU-MCP/releases/latest
+技能包：Release 里的 ksu-mcp-skills-*.zip（或仓库 skills/ 目录）
+
+请按顺序完成，每步都告诉我进展：
+
+1) 安装技能（你自己做）
+   下载 ksu-mcp-skills-*.zip 并解压，把其中的 ksu-mcp/ 目录**完整**放进你的 skills 目录
+   （Claude Code: ~/.claude/skills/ksu-mcp/；DeepSeek Harness: ~/.dsh/skills/ksu-mcp/；
+    其他客户端按你的技能目录约定）。
+   必须包含 SKILL.md、skill.json、reference/（3 个 .md）、examples/。
+   装完请读一遍 SKILL.md，并向我复述其中的「成本模型」与「五条硬规则」，确认你已掌握。
+
+2) 配置 MCP 连接（你写配置，我提供信息）
+   传输：Streamable HTTP；鉴权：请求头 Authorization: Bearer <Token>
+   三选一，按我的场景建议用哪个：
+     · 设备本机： http://127.0.0.1:9123/mcp
+     · 局域网：   http://<手机局域网IP>:9123/mcp
+     · 公网隧道： https://<隧道域名>/mcp/<设备名>   （用服务端下发的 clientToken）
+
+3) 手机端安装（需要我动手，你给指令）
+   我还没装模块 → 指导我把 ksu-mcp-server-*.zip 装进 KernelSU Manager（模块 → ＋ → 选 zip → 安装 → 重启）。
+   装完让我打开模块的 WebUI，在「运行状态」面板复制 Token；
+   要局域网访问就在「运行配置」里打开「局域网访问」并保存；
+   要公网访问就在「内网穿透」里填服务器 wss://<域名>/tunnel、设备名、tunnelToken 并保存。
+
+4) 自检（你调用，用来确认链路通）
+   依次调用：android_get_device_info → android_get_foreground_app → android_get_screen_elements
+   把结果（设备型号、前台应用、屏幕上可见元素）告诉我，确认你已经能「看到」我的手机屏幕。
+   如果 read_only 报错，说明设备开了只读模式，属预期，告诉我即可。
+
+5) 以后的默认行为（请严格遵守你装的 ksu-mcp 技能）
+   · 界面识别优先用控件树（android_get_screen_elements / android_tap_element），
+     不要用 android_screenshot 去估坐标；只有需要看图片/图表/渲染异常时才截图。
+   · 点击/输入尽量一次调用做完（android_tap_element / android_set_element_text），不要拆成两步。
+   · 等界面加载用 android_wait_for_element，不要 sleep 后反复截图。
+   · 日志、应用列表、进程列表必须加过滤与分页，避免把上下文撑爆。
+   · 破坏性操作（删除、格式化、改系统设置）执行前必须先问我。
+````
+
+### 18.1 只想装 MCP、不想装技能？
+
+把上面第 1 步删掉，其余照做即可。MCP 服务端自带完整的工具描述，AI 可用，但会缺少「怎么调最划算」的指导。
+
+### 18.2 只想让 AI 操作公网设备？
+
+把第 2 步替换为：`https://<你的隧道域名>/mcp/<设备名>` + `Bearer <clientToken>`，
+并确认手机侧 `mcpd tunnel-status` 显示 `"connected": true`。

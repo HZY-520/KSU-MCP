@@ -1,8 +1,34 @@
-# KSU MCP 全栈 · 构建与发布说明（v1.2.1）
+# KSU MCP 全栈 · 构建与发布说明（v1.3.0）
 
-本仓库为 **KSU MCP Server v1.2.1 全栈**源码：手机端 KernelSU/Magisk 模块（Go）+ 公网穿透服务端（Node.js）。
+本仓库为 **KSU MCP Server v1.3.0 全栈**源码：手机端 KernelSU/Magisk 模块（Go）+ 公网穿透服务端（Node.js）。
 
-## 一、v1.2.1 相对 v1.2.0 的变更（补丁）
+## 一、v1.3.0 相对 v1.2.1 的变更
+
+**新增 8 个屏幕控件树工具**（`src/uiauto.go`）：读取 Android `uiautomator` 控件树 XML，
+解析展平后返回**结构化元素**（文本 / 资源 id / 类名 / 可见描述 / 精确中心坐标），
+用结构化数据替代截图做界面识别；原截图工具保持不变。
+
+- `android_get_screen_elements`：界面识别首选（1~3KB JSON 替代上千 token 的截图）
+- `android_find_element`：按选择器精确查找
+- `android_tap_element`：按选择器一次点击（查找+算坐标+点击合一）
+- `android_set_element_text`：按选择器写入文本（聚焦→清空→输入→读回校验）
+- `android_wait_for_element`：等待控件出现/消失（设备端轮询）
+- `android_scroll_to_element`：滚动查找控件
+- `android_dump_ui_hierarchy`：完整控件树（JSON/XML，疑难场景）
+- `android_get_foreground_app`：前台应用包名与 Activity
+
+实现要点：`could not get idle state` 重试 + `--compressed` 回退；`label` 由子孙文本合成
+（让可点击容器也能被文本定位）；与祖先同文本的冗余节点去重；2 秒内存缓存
+（get→find→tap 只 dump 一次）。
+
+**新增 AI 技能包** `skills/ksu-mcp/`：成本模型 / 决策树 / 选择器排序 / 参数纪律 / 排障清单 /
+端到端示例，单独打包为 `ksu-mcp-skills-v1.3.0.zip` 随 Release 发布。
+
+**测试**：MCP e2e 新增 42 项控件树断言；工具数量断言改为从二进制动态推导
+（新增工具时测试无需改动）；测试桩新增 `uiautomator`/`dumpsys window`，
+且 `input`/`uiautomator` 桩可模拟「输入后界面文本真的变了」，从而真实覆盖 verify 分支。
+
+## 二、v1.2.1 相对 v1.2.0 的变更（补丁）
 
 - **修复隧道运行态落盘竞态**：快照在锁内取、文件在锁外写，多 goroutine 并发落盘时
   旧快照覆盖新快照（丢更新），且共用同一 `.tmp` 路径可能互相踩踏。
@@ -22,7 +48,7 @@
 
 > v1.2.0 的 tag 与 Release 保留不动以便追溯。
 
-## 二、v1.2.0 相对 v1.1.0 的变更
+## 三、v1.2.0 相对 v1.1.0 的变更
 
 ### 新增能力
 
@@ -63,7 +89,7 @@
 - 修复 shell 脚本用 `grep '"running": true'` 解析 JSON 的脆弱耦合，改用 `watchdog-status` 退出码。
 - `module/README.md` 不再是根 README 的逐字节副本，改为模块运维专章。
 
-## 三、目录结构
+## 四、目录结构
 
 ```
 ksu-mcp/
@@ -80,6 +106,7 @@ ksu-mcp/
 │   ├── tunnel.go              #   隧道客户端 / 运行态 / 质量指标
 │   ├── watchdog.go            #   进程守护
 │   ├── control.go             #   daemon / 启停 / 状态 / 配置
+│   ├── uiauto.go              #   屏幕控件树工具（v1.3.0 新增）
 │   ├── api.go                 #   聚合状态与 WebUI 只读 API
 │   ├── main_test.go           #   单元测试
 │   └── go.mod / go.sum
@@ -109,7 +136,7 @@ ksu-mcp/
 > 二进制（`module/bin/{arm64,arm}/mcpd`）**不入库**，按第三节从源码重建；
 > `tunnel-server/config.json`（含真实 Token）已在 `.gitignore` 中忽略。
 
-## 四、构建客户端模块 zip（手机端）
+## 五、构建客户端模块 zip（手机端）
 
 ```bash
 # 0) 准备 Go 1.23+（仓库源码 go.mod 声明 go 1.23）
@@ -129,10 +156,10 @@ cd src && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/mcpd-test . && 
 
 # 3) 打包模块（zip 内必须直接是模块文件，不能再套一层目录；
 #    正式发布包必须同时包含 arm64 与 arm 两个架构目录，便于同一 zip 兼容两种设备）
-cd module && zip -r ../ksu-mcp-server-v1.2.1.zip . -x "*.DS_Store" && cd ..
+cd module && zip -r ../ksu-mcp-server-v1.3.0.zip . -x "*.DS_Store" && cd ..
 
 # 3b) 校验 zip 结构（根目录应直接是 module.prop，且双架构二进制均存在）
-unzip -l ksu-mcp-server-v1.2.1.zip | grep -E "module.prop|bin/(arm64|arm)/mcpd"
+unzip -l ksu-mcp-server-v1.3.0.zip | grep -E "module.prop|bin/(arm64|arm)/mcpd"
 ```
 
 > 打包说明：`customize.sh` 在安装时按架构把 `bin/<arch>/mcpd` 移到 `bin/mcpd` 并删除另一架构目录。
@@ -143,7 +170,7 @@ unzip -l ksu-mcp-server-v1.2.1.zip | grep -E "module.prop|bin/(arm64|arm)/mcpd"
   mcpd 在代码内自动加载（`androidCACertPool`），无需额外配置；
 - 隧道支持 `tunnel.ip` 直连兜底：手机 DNS 异常时直连服务端公网 IP，TLS 仍按域名校验。
 
-## 五、构建/部署服务端（VPS / 宝塔）
+## 六、构建/部署服务端（VPS / 宝塔）
 
 ```bash
 cd tunnel-server
@@ -155,7 +182,7 @@ node server.js                  # 或 pm2 start server.js --name ksu-mcp-tunnel
 
 部署详见 `tunnel-server/README.md`（宝塔 Node 项目 + Nginx 反代 + WebSocket Upgrade + SSL）。
 
-## 六、测试与验收
+## 七、测试与验收
 
 ```bash
 # 1) Go 单元测试（命名规范 / 协议协商 / 路径隔离 / 退避抖动 / URL 推导 / 注册表一致性 / 并发落盘）
@@ -178,16 +205,22 @@ python3 tests/soak_test.py 7200 10
 
 验收结论请以各测试脚本的最终汇总行为准（全部用例通过 / 失败明细）。
 
-## 七、发布清单
+## 八、发布清单
 
 1. 版本号三处同步：`src/main.go` 的 `appVersion`、`module/module.prop` 的
    `version`/`versionCode`、本文档与 README 标题。
 2. 双架构二进制重建并确认 `file module/bin/*/mcpd` 为 ARM ELF（arm64 为 aarch64，arm 为 ARM EABI5）。
-3. 打包 `ksu-mcp-server-v1.2.1.zip`，**必须包含** `bin/arm64/mcpd` 与 `bin/arm/mcpd`。
-4. 确认不提交敏感信息：`tunnel-server/config.json`、任何真实 Token、`node_modules/`。
-5. 创建 GitHub Release，上传 zip，Release Notes 写明：新增功能、修复问题、升级注意事项、已知限制。
+3. 打包 `ksu-mcp-server-v1.3.0.zip`，**必须包含** `bin/arm64/mcpd` 与 `bin/arm/mcpd`。
+4. **打包技能包**（单独上传为 Release 资产）：
+   ```bash
+   cd skills && zip -r ../ksu-mcp-skills-v1.3.0.zip ksu-mcp README.md && cd ..
+   unzip -l ksu-mcp-skills-v1.3.0.zip | grep -E "SKILL.md|skill.json|reference/|examples/"
+   ```
+5. 确认不提交敏感信息：`tunnel-server/config.json`、任何真实 Token、`node_modules/`。
+6. 创建 GitHub Release，上传模块 zip、双架构二进制、**技能包 zip**，Release Notes 写明：
+   新增功能、修复问题、升级注意事项、已知限制。
 
-## 八、安全提醒
+## 九、安全提醒
 
 - 两个 Token（tunnelToken / clientToken）请用随机源生成并妥善保管，泄露立即更换；
 - WebUI 管理台仅经 HTTPS 访问，连续 5 次登录失败锁定 IP 10 分钟；
