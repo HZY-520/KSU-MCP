@@ -1,99 +1,175 @@
-# KSU MCP 全栈源码包 · 构建说明
+# KSU MCP 全栈 · 构建与发布说明（v1.2.0）
 
-本包为 **KSU MCP Server v1.1.0 全栈**源码：手机端 KernelSU/Magisk 模块（Go）+ 公网穿透服务端（Node.js）。
+本仓库为 **KSU MCP Server v1.2.0 全栈**源码：手机端 KernelSU/Magisk 模块（Go）+ 公网穿透服务端（Node.js）。
 
-## v1.1.0 相对 v1.0.x 的变更速览
+## 一、v1.2.0 相对 v1.1.0 的变更
 
-- **进程守护（watchdog）**：`mcpd watchdog [--detach]` 每 10s 巡检，daemon 崩溃/被杀自动拉起（/health 探活，
-  连续 3 次失败强杀重启），隧道配置启用即保活；service.sh / boot-completed.sh 在 init 上下文拉起 watchdog，
-  **关闭 KSU Manager / 离开 WebUI 后服务不中断**。`mcpd stop` 改为停止全部（tunnel / daemon / watchdog）。
-- **隧道稳定性**：20s WS 心跳 + 75s 读超时判死；网卡变化（WiFi/流量切换）强制重连；
-  写操作互斥锁修复并发写 WS 的掉线问题；GET/SSE 长流空闲超时放宽至 30 分钟。
-- **流式转发协议**：服务端 ≥ v1.1.0 时握手协商（`hello` 帧），大响应/长流按 64KB 分帧
-  （`response(fin)` + `chunk`），旧版服务端自动降级单帧；设备断线时服务端 500ms 内快速失败在途请求。
-- **服务端管理台**：/admin 全新 UI（移动端适配），添加设备支持**自定义 tunnelToken / clientToken**，
-  新增踢下线 API；修复响应超时/断线双写崩溃竞态。
-- **WebUI 重构**：设备端控制台与服务端管理台均换新（卡片式、分段标签、开关、涟漪/脉冲/渐入动画）。
+### 新增能力
 
-## 目录结构
+- **MCP 协议协商至 2025-11-25**（兼容 2025-06-18 / 2025-03-26 / 2024-11-05），
+  `initialize` 返回 `instructions` 向 Agent 说明工具命名与推荐调用顺序。
+- **新增 21 个 `android_{action}_{resource}` 规范命名工具**（原 11 个扁平命名工具保留为弃用别名）：
+  设备/电池/存储/网络信息、应用分页列表、进程列表、logcat、系统属性、设置读写、
+  剪贴板读写、截屏（返回 **MCP image 内容块**）、文本/按键/点击/滑动注入、
+  以及规范化的 shell/文件/目录工具。
+- **设备端只读控制 API**：`GET /api/state`（含三网络地址与隧道质量指标）、`/api/logs`、`/api/tools`，
+  带 CORS 支持，供 WebUI 走 `fetch` 秒级刷新（避免高频 fork shell）；隧道转发层拒绝 `/api/*`。
+- **隧道运行态与质量指标**：`tunnel.runtime.json` 记录连接态/延迟/重连次数/收发字节/最后错误；
+  服务端新增 `GET /api/metrics` 与设备级指标，管理台卡片展示。
+
+### 修复
+
+- **WebUI `.hidden` CSS 规则缺失** → v1.1.0 的「本机/局域网/公网」分段标签完全失效
+  （三块面板同时平铺、点击无反应），现补规则并加 jsdom 回归断言。
+- **WebUI 卡顿**：移除 `background-attachment:fixed`、卡片级 `backdrop-filter`、
+  `box-shadow` 关键帧动画、JS 涟漪（`getBoundingClientRect` 强制回流）；开关改 `transform:translateX`；
+  轮询降频 + 失焦暂停 + 失败退避；列表 keyed-diff；日志限 300 行并与上次内容比对。
+- **WebUI 摆设组件**：修复操作按钮失败后永久卡在「处理中」；隧道状态由「仅判 PID」改为真实连接态；
+  修复隧道 Token 输入框永不回填导致「保存/连接」必然报错（改为**留空即沿用已保存 Token**）；
+  补齐工具列表面板与非 KernelSU 环境的降级横幅 + 写操作禁用。
+- **连接稳定性**：隧道心跳 20s→10s、判死 75s→35s；重连退避 2s→30s 指数 + ±20% 抖动
+  （v1.1.0 连上即复位导致退避失效）；网卡指纹轮询 15s→5s 并纳入默认路由；
+  Streamable HTTP 会话加 TTL/容量上限/定期回收（修复内存泄漏）；GET 长流下发 SSE `retry` 实现断流自动重连。
+- **隧道全场景可达**：watchdog 由「仅判 PID」升级为「存活 + 运行态新鲜度」双判定
+  （用 `NextRetryAt` 区分合法退避与真卡死）；服务端心跳 30s→10s / 3 次丢包判死。
+- **控制面外泄风险**：隧道转发层拒绝 `/api` 及其路径穿越写法（`/mcp/../api/state`）。
+- 截屏临时文件不再无限增长（仅保留最近 5 张）；`markRetry` 曾被写入节流吞掉导致
+  watchdog 误判（单测发现并修复）。
+
+### 工程
+
+- Go 源码从单文件 `main.go` 拆为 8 个职责文件 + 单元测试文件。
+- 新增 3 套自动化测试（详见第五节）。
+- 修复 shell 脚本用 `grep '"running": true'` 解析 JSON 的脆弱耦合，改用 `watchdog-status` 退出码。
+- `module/README.md` 不再是根 README 的逐字节副本，改为模块运维专章。
+
+## 二、目录结构
 
 ```
-ksu-mcp-src-v1.1.0/
-├── README.md                  # 模块总说明（功能 / 安装 / 使用）
-├── BUILD.md                   # 本文件：构建与打包
-├── docs/architecture.html     # 系统架构图（浏览器打开）
+ksu-mcp/
+├── README.md                  # 模块总说明
+├── BUILD.md                   # 本文件
+├── docs/
+│   ├── analysis-and-diagnosis.md  # 现状分析与六大问题根因诊断报告
+│   └── architecture.html          # 系统架构图（浏览器打开）
 ├── src/                       # 【客户端】mcpd Go 源码
-│   ├── main.go                #   主程序（Streamable HTTP + SSE + 隧道客户端 + WebUI 桥）
-│   ├── go.mod                 #   依赖：github.com/gorilla/websocket v1.5.3
-│   └── go.sum
-├── module/                    # 【客户端】模块打包源（安装脚本 + WebUI + 配置）
-│   ├── module.prop            #   模块元信息（v1.0.0 / versionCode=1）
-│   ├── customize.sh           #   安装脚本：架构检测 / 二进制部署 / 初始化配置
-│   ├── service.sh             #   开机自启（service 阶段，含隧道自动拉起）
-│   ├── boot-completed.sh      #   开机完成兜底保活（含隧道保活）
-│   ├── sepolicy.rule          #   SELinux 规则补充
-│   ├── system/bin/mcpd        #   systemless 包装器（暴露 mcpd 命令）
-│   ├── webroot/index.html     #   KernelSU WebUI 控制台
-│   └── README.md
-└── tunnel-server/             # 【服务端】内网穿透 Node.js 服务
-    ├── server.js              #   设备接入 / 转发 / 心跳 / WebUI API
-    ├── admin.html             #   管理台页面（/admin，登录鉴权）
-    ├── package.json           #   Node 依赖：ws ^8.18.0
-    ├── package-lock.json
-    ├── config.example.json    #   配置模板（含 admin 账号、设备与双 Token）
-    ├── nginx.conf.sample      #   Nginx 反代 + WebSocket Upgrade 示例
-    └── README.md              #   部署手册（宝塔 / VPS）
+│   ├── main.go                #   入口 / 配置 / 常量 / CLI 分发
+│   ├── android.go             #   Android 能力采集层
+│   ├── tools.go               #   MCP 工具注册表与实现
+│   ├── transport.go           #   stdio / Streamable HTTP / SSE / 会话回收
+│   ├── tunnel.go              #   隧道客户端 / 运行态 / 质量指标
+│   ├── watchdog.go            #   进程守护
+│   ├── control.go             #   daemon / 启停 / 状态 / 配置
+│   ├── api.go                 #   聚合状态与 WebUI 只读 API
+│   ├── main_test.go           #   单元测试
+│   └── go.mod / go.sum
+├── module/                    # 【客户端】模块打包源
+│   ├── module.prop            #   v1.2.0 / versionCode=3
+│   ├── customize.sh           #   安装脚本
+│   ├── service.sh             #   开机自启
+│   ├── boot-completed.sh      #   开机完成兜底保活
+│   ├── sepolicy.rule
+│   ├── system/bin/mcpd        #   PATH 包装器
+│   ├── webroot/index.html     #   WebUI 控制台
+│   ├── bin/{arm64,arm}/mcpd   #   架构二进制（构建产物，不入库）
+│   └── README.md              #   模块运维说明
+├── tunnel-server/             # 【服务端】内网穿透 Node.js 服务
+│   ├── server.js / admin.html
+│   ├── package.json / package-lock.json
+│   ├── config.example.json / nginx.conf.sample
+│   └── README.md              #   部署手册（宝塔 / VPS）
+└── tests/                     # 自动化测试
+    ├── e2e_test.py            #   MCP 协议端到端（stdio + HTTP + 全工具解析）
+    ├── tunnel_e2e_test.py     #   隧道端到端（真实 Node 服务端 + 真实 mcpd 客户端）
+    ├── webui_test.js          #   WebUI jsdom 冒烟 + 性能约定回归
+    ├── soak_test.py           #   稳定性长跑
+    └── fakebin/               #   Android 命令模拟器（供 Linux 上验证解析逻辑）
 ```
 
-> 二进制（module/bin/arm64、arm 下的 mcpd）与运行时配置（tunnel-server/config.json，含真实
-> 双 Token）**不入源码包**，按下方步骤从源码重建。
+> 二进制（`module/bin/{arm64,arm}/mcpd`）**不入库**，按第三节从源码重建；
+> `tunnel-server/config.json`（含真实 Token）已在 `.gitignore` 中忽略。
 
-## 一、构建客户端模块 zip（手机端）
+## 三、构建客户端模块 zip（手机端）
 
 ```bash
-# 1. 编译三个架构（要求 Go 1.23+）
-cd src
-GOOS=linux GOARCH=amd64 go build -o /tmp/mcpd-test .      # 本地测试用
-GOOS=linux GOARCH=arm64 go build -o ../module/bin/arm64/mcpd .
-GOOS=linux GOARCH=arm GOARM=7 go build -o ../module/bin/arm/mcpd .
-chmod 755 ../module/bin/arm64/mcpd ../module/bin/arm/mcpd
-cd ..
+# 0) 准备 Go 1.23+（仓库源码 go.mod 声明 go 1.23）
+cd src && go mod tidy && cd ..
 
-# 2. 打包模块（customize.sh 安装时会把对应架构二进制移到 bin/mcpd）
-cd module && zip -r ../ksu-mcp-server-v1.1.0.zip . -x "*.DS_Store" && cd ..
+# 1) 编译双架构（注意：目标 GOOS=linux，Android 运行 Linux 用户态 ELF）
+cd src
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64        go build -trimpath -ldflags "-s -w" -o ../module/bin/arm64/mcpd .
+CGO_ENABLED=0 GOOS=linux GOARCH=arm   GOARM=7 go build -trimpath -ldflags "-s -w" -o ../module/bin/arm/mcpd .
+cd ..
+chmod 755 module/bin/arm64/mcpd module/bin/arm/mcpd
+
+# 2) 本地可执行性冒烟（amd64 版，验证版本号与工具注册表）
+cd src && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/mcpd-test . && cd ..
+/tmp/mcpd-test version      # → 1.2.0
+/tmp/mcpd-test tools        # → 32 个工具（21 规范 + 11 弃用）
+
+# 3) 打包模块（zip 内必须直接是模块文件，不能再套一层目录；
+#    正式发布包必须同时包含 arm64 与 arm 两个架构目录，便于同一 zip 兼容两种设备）
+cd module && zip -r ../ksu-mcp-server-v1.2.0.zip . -x "*.DS_Store" && cd ..
+
+# 3b) 校验 zip 结构（根目录应直接是 module.prop，且双架构二进制均存在）
+unzip -l ksu-mcp-server-v1.2.0.zip | grep -E "module.prop|bin/(arm64|arm)/mcpd"
 ```
 
+> 打包说明：`customize.sh` 在安装时按架构把 `bin/<arch>/mcpd` 移到 `bin/mcpd` 并删除另一架构目录。
+
 编译要点：
-- 目标 **GOOS=linux**（KernelSU/Magisk 在 Android 上运行 Linux 用户态 ELF）；
-- TLS 证书校验依赖 **Android 系统 CA 目录**（/system/etc/security/cacerts 等），
-  mcpd 已在代码内自动加载（`androidCACertPool`），无需额外配置；
+- **TLS 证书校验**依赖 Android 系统 CA 目录（`/system/etc/security/cacerts`、
+  `/apex/com.android.conscrypt/cacerts`、`/data/misc/keychain/cacerts-added`），
+  mcpd 在代码内自动加载（`androidCACertPool`），无需额外配置；
 - 隧道支持 `tunnel.ip` 直连兜底：手机 DNS 异常时直连服务端公网 IP，TLS 仍按域名校验。
 
-## 二、构建服务端 zip（VPS / 宝塔）
+## 四、构建/部署服务端（VPS / 宝塔）
 
 ```bash
 cd tunnel-server
-npm install                     # 安装依赖（ws）
-# 生成配置：cp config.example.json config.json
+npm install                     # 依赖 ws ^8.18.0
+cp config.example.json config.json
 # 生成双 Token：openssl rand -hex 24 ×2，填入 devices.<设备名>.tunnelToken / clientToken
 node server.js                  # 或 pm2 start server.js --name ksu-mcp-tunnel
 ```
 
 部署详见 `tunnel-server/README.md`（宝塔 Node 项目 + Nginx 反代 + WebSocket Upgrade + SSL）。
 
-## 三、端到端链路
+## 五、测试与验收
 
+```bash
+# 1) Go 单元测试（命名规范 / 协议协商 / 路径隔离 / 退避抖动 / URL 推导 / 注册表一致性）
+cd src && go test ./... && cd ..
+
+# 2) MCP 协议端到端（stdio + Streamable HTTP + 会话生命周期 + 控制 API + 全工具解析正确性）
+python3 tests/e2e_test.py
+
+# 3) 隧道端到端（真实 Node 服务端 + 真实 mcpd 隧道客户端 + 流式分片 + 断线恢复 + 看门狗卡死检测）
+cd tunnel-server && npm install && cd ..
+python3 tests/tunnel_e2e_test.py
+
+# 4) WebUI 冒烟（jsdom：交互完整性 / 无摆设组件 / 性能约定回归防护）
+npm install jsdom
+NODE_PATH=$PWD/node_modules node tests/webui_test.js
+
+# 5) 稳定性长跑（默认 2 小时，10s 采样；结果写入 /tmp/ksumcp-soak-*/soak.json）
+python3 tests/soak_test.py 7200 10
 ```
-MCP 客户端 ──HTTPS──> n.huziyang.top ──(Nginx:443)──> Node 服务端(8081)
-    ──WebSocket──> 手机 mcpd tunnel（直连兜底 IP）──> 本地 MCP Server(127.0.0.1:9123)
-```
 
-- 手机端配置：`/data/adb/ksu_mcp/config.json` 的 `tunnel` 段（server/device/token/ip）
-- 远端调用：`https://n.huziyang.top/mcp/<device>` + `Authorization: Bearer <clientToken>`
-- 管理台：`https://n.huziyang.top/admin`（默认 admin/admin123，首次登录请修改）
+验收结论请以各测试脚本的最终汇总行为准（全部用例通过 / 失败明细）。
 
-## 四、安全提醒
+## 六、发布清单
+
+1. 版本号三处同步：`src/main.go` 的 `appVersion`、`module/module.prop` 的
+   `version`/`versionCode`、本文档与 README 标题。
+2. 双架构二进制重建并确认 `file module/bin/*/mcpd` 为 ARM ELF（arm64 为 aarch64，arm 为 ARM EABI5）。
+3. 打包 `ksu-mcp-server-v1.2.0.zip`，**必须包含** `bin/arm64/mcpd` 与 `bin/arm/mcpd`。
+4. 确认不提交敏感信息：`tunnel-server/config.json`、任何真实 Token、`node_modules/`。
+5. 创建 GitHub Release，上传 zip，Release Notes 写明：新增功能、修复问题、升级注意事项、已知限制。
+
+## 七、安全提醒
 
 - 两个 Token（tunnelToken / clientToken）请用随机源生成并妥善保管，泄露立即更换；
 - WebUI 管理台仅经 HTTPS 访问，连续 5 次登录失败锁定 IP 10 分钟；
-- 手机端 `read_only` / `exec_allowlist` 可限制危险操作面。
+- 手机端 `read_only` / `exec_allowlist` 可限制危险操作面；
+- 设备端 `/api/*` 控制 API 不经隧道转发，本机 Token 不会外泄。

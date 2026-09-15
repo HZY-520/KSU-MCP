@@ -50,7 +50,7 @@
 <body>
 
 <h1><span class="logo">M</span>KSU MCP Server 架构示意</h1>
-<div class="sub">模块安装 · 开机自启 · 运行时数据流 · 内网穿透 · 安全边界（v1.1.0）</div>
+<div class="sub">模块安装 · 进程守护 · 运行时数据流 · 内网穿透 · 安全边界（v1.2.0）</div>
 <div class="legend-note">本图为「示意」：节点与连线表达组件关系与数据流，非精确度量。</div>
 
 <h2>① 部署与开机自启流程</h2>
@@ -86,23 +86,36 @@
   <div class="boxes">
     <div class="box acc"><b>鉴权</b><span>Token 校验；非回环监听强制要求</span></div>
     <div class="box acc"><b>方法路由</b><span>initialize · tools/list · tools/call · ping · notifications</span></div>
-    <div class="box acc"><b>会话管理</b><span>Streamable HTTP 会话创建 / 校验 / 注销</span></div>
+    <div class="box acc"><b>协议协商</b><span>2025-11-25（兼容 06-18 / 03-26 / 2024-11-05）</span></div>
+    <div class="box acc"><b>会话管理</b><span>创建 / 校验 / 注销 + TTL 30min + 上限 512（定期回收）</span></div>
+    <div class="box acc"><b>只读控制 API</b><span>/api/state · /api/logs · /api/tools（CORS，供 WebUI）</span></div>
     <div class="box acc"><b>策略约束</b><span>read_only · exec_allowlist · 超时</span></div>
   </div>
   <div class="vflow">▼ 工具层</div>
-  <div class="lhead">工具层 <span class="tag">11 个内置工具</span></div>
+  <div class="lhead">工具层 <span class="tag">32 个工具（21 规范命名 + 11 弃用别名）</span></div>
   <div class="tools">
-    <span class="tool"><b>exec_command</b> root shell</span>
-    <span class="tool"><b>read_file</b> 读文件</span>
-    <span class="tool"><b>write_file</b> 写文件</span>
-    <span class="tool"><b>list_dir</b> 列目录</span>
-    <span class="tool"><b>device_info</b> 设备信息</span>
-    <span class="tool"><b>app_list</b> 应用列表</span>
-    <span class="tool"><b>battery_info</b> 电池</span>
-    <span class="tool"><b>network_info</b> 网络</span>
-    <span class="tool"><b>screenshot</b> 截屏</span>
-    <span class="tool"><b>clipboard_get</b> 剪贴板</span>
-    <span class="tool"><b>getprop</b> 系统属性</span>
+    <span class="tool"><b>android_get_device_info</b> 设备/Root 环境</span>
+    <span class="tool"><b>android_get_battery_status</b> 电池</span>
+    <span class="tool"><b>android_get_storage_info</b> 存储分区</span>
+    <span class="tool"><b>android_get_network_info</b> 网络详情</span>
+    <span class="tool"><b>android_list_packages</b> 应用列表（分页）</span>
+    <span class="tool"><b>android_get_running_processes</b> 进程</span>
+    <span class="tool"><b>android_get_logcat</b> 日志</span>
+    <span class="tool"><b>android_get_prop</b> 系统属性</span>
+    <span class="tool"><b>android_get_setting</b> 读设置</span>
+    <span class="tool"><b>android_screenshot</b> 截屏（image 块）</span>
+    <span class="tool"><b>android_input_text</b> 文本注入</span>
+    <span class="tool"><b>android_input_key</b> 按键注入</span>
+    <span class="tool"><b>android_input_tap</b> 坐标点击</span>
+    <span class="tool"><b>android_input_swipe</b> 滑动手势</span>
+    <span class="tool"><b>android_toggle_setting</b> 设置开关</span>
+    <span class="tool"><b>android_get_clipboard</b> 读剪贴板</span>
+    <span class="tool"><b>android_set_clipboard</b> 写剪贴板</span>
+    <span class="tool"><b>android_exec_shell</b> root shell</span>
+    <span class="tool"><b>android_read_file</b> 读文件</span>
+    <span class="tool"><b>android_write_file</b> 写文件</span>
+    <span class="tool"><b>android_list_dir</b> 列目录</span>
+    <span class="tool dim">弃用别名 ×11：device_info · exec_command · read_file · write_file · list_dir · app_list · battery_info · network_info · screenshot · clipboard_get · getprop</span>
   </div>
   <div class="vflow">▼ 系统能力</div>
   <div class="lhead">Android 系统（root） <span class="tag">设备本地</span></div>
@@ -112,17 +125,25 @@
     <div class="box ok"><b>系统服务</b><span>pm / dumpsys / screencap / getprop</span></div>
     <div class="box ok"><b>内核接口</b><span>/proc /sys（内核、电池等）</span></div>
   </div>
+  <div class="vflow">▼ 进程守护</div>
+  <div class="lhead">watchdog（每 10s 巡检） <span class="tag">开机 init 上下文拉起</span></div>
+  <div class="boxes">
+    <div class="box acc"><b>daemon 存活</b><span>/health 探活，连续 3 次失败强杀重启</span></div>
+    <div class="box acc"><b>隧道存活</b><span>进程不存在即拉起；运行态停滞 &gt;45s 且已过计划重连时刻（连续 3 次）判定卡死</span></div>
+    <div class="box acc"><b>心跳参数</b><span>10s ping / 35s 判死 / 退避 2s→30s（±20% 抖动）/ 网卡轮询 5s</span></div>
+    <div class="box acc"><b>会话回收</b><span>Streamable HTTP 会话 TTL 30min、上限 512、每分钟清理</span></div>
+  </div>
 </div></div>
 
 <h2>③ 内网穿透链路（设备为客户端）</h2>
 <div class="card"><div class="flow">
   <div class="step"><span class="num">1</span><div><div class="t">远端 MCP 客户端</div><div class="d">Streamable HTTP · https://n.huziyang.top/mcp/&lt;device&gt; · Bearer clientToken</div></div></div>
   <div class="arrow">▼ HTTPS</div>
-  <div class="step"><span class="num">2</span><div><div class="t">Node.js 穿透服务端（公网 VPS）</div><div class="d">鉴权 device+tunnelToken/clientToken → 校验设备在线 → 生成转发请求</div></div></div>
+  <div class="step"><span class="num">2</span><div><div class="t">Node.js 穿透服务端（公网 VPS）</div><div class="d">鉴权 device+tunnelToken/clientToken → 校验设备在线 → 生成转发请求；10s WS ping / 3 次丢包（≈35s）判死；设备级质量指标（RTT / 重连 / 流量 / 失败）</div></div></div>
   <div class="arrow">▼ WebSocket 隧道</div>
-  <div class="step"><span class="num">3</span><div><div class="t">设备端 mcpd tunnel（客户端）</div><div class="d">收到 request → 注入本地 Bearer Token → 转发 127.0.0.1:9123/mcp</div></div></div>
+  <div class="step"><span class="num">3</span><div><div class="t">设备端 mcpd tunnel（客户端）</div><div class="d">收到 request → 注入本地 Bearer Token → 转发 127.0.0.1:9123/mcp；拒绝 /api/* 控制面；运行态落盘 tunnel.runtime.json</div></div></div>
   <div class="arrow">▼ HTTP 回环</div>
-  <div class="step"><span class="num">4</span><div><div class="t">本地 MCP 服务执行工具</div><div class="d">响应原路回传（状态码 + Content-Type + Mcp-Session-Id）</div></div></div>
+  <div class="step"><span class="num">4</span><div><div class="t">本地 MCP 服务执行工具</div><div class="d">响应原路回传：小响应单帧，&gt;256KB / GET 长流按 64KB 分帧（头帧 + chunk + 结束帧）</div></div></div>
 </div></div>
 
 <h2>④ 安全边界</h2>
@@ -132,10 +153,13 @@
   <div class="box"><b class="good">✓ Token 鉴权</b><span>48 位随机 Token，WebUI 一键轮换</span></div>
   <div class="box"><b class="good">✓ 只读模式</b><span>read_only=true 禁用命令执行与写文件</span></div>
   <div class="box"><b class="good">✓ 命令允许列表</b><span>allowlist 非空时仅放行指定命令前缀</span></div>
+  <div class="box"><b class="good">✓ 控制面隔离</b><span>隧道仅转发 /mcp /sse /health；/api/* 及路径穿越写法一律拒绝</span></div>
+  <div class="box"><b class="good">✓ 非回环强制鉴权</b><span>bind 非回环且无 Token 时拒绝启动</span></div>
   <div class="box"><b class="bad">⚠ 隧道暴露公网</b><span>双 Token（tunnelToken/clientToken）须妥善保管，泄露立即更换</span></div>
 </div></div>
 
-<footer>KSU MCP Server v1.1.0 · 示意结构，实际以模块内文件与 config.json 为准</footer>
+<footer>KSU MCP Server v1.2.0 · 示意结构，实际以模块内文件与 config.json 为准</footer>
+<p style="text-align:center;color:#727b91;font-size:12px;margin-top:8px">详细的现状分析与六大问题根因诊断见 docs/analysis-and-diagnosis.md</p>
 
 </body>
 </html>
