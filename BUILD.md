@@ -211,13 +211,23 @@ python3 tests/soak_test.py 7200 10
    `version`/`versionCode`、本文档与 README 标题。
 2. 双架构二进制重建并确认 `file module/bin/*/mcpd` 为 ARM ELF（arm64 为 aarch64，arm 为 ARM EABI5）。
 3. 打包 `ksu-mcp-server-v1.3.0.zip`，**必须包含** `bin/arm64/mcpd` 与 `bin/arm/mcpd`。
-4. **打包技能包**（单独上传为 Release 资产）：
+4. **打包服务端**（单独上传为 Release 资产，包名与 `server.js` 的 `VERSION`、Release 版本一致）：
+   ```bash
+   cd tunnel-server
+   zip -q ../ksu-mcp-tunnel-server-v1.3.0.zip server.js admin.html package.json \
+       package-lock.json config.example.json nginx.conf.sample README.md
+   cd ..
+   # 校验：不得包含 config.json（含真实双 Token）与 node_modules
+   unzip -l ksu-mcp-tunnel-server-v1.3.0.zip
+   unzip -Z1 ksu-mcp-tunnel-server-v1.3.0.zip | grep -E "config\.json$|node_modules" && echo "❌ 含敏感文件" || echo "✅ 干净"
+   ```
+5. **打包技能包**（单独上传为 Release 资产）：
    ```bash
    cd skills && zip -r ../ksu-mcp-skills-v1.3.0.zip ksu-mcp README.md && cd ..
    unzip -l ksu-mcp-skills-v1.3.0.zip | grep -E "SKILL.md|skill.json|reference/|examples/"
    ```
-5. 确认不提交敏感信息：`tunnel-server/config.json`、任何真实 Token、`node_modules/`。
-6. 创建 GitHub Release，上传模块 zip、双架构二进制、**技能包 zip**，Release Notes 写明：
+6. 确认不提交敏感信息：`tunnel-server/config.json`、任何真实 Token、`node_modules/`。
+7. 创建 GitHub Release，上传模块 zip、双架构二进制、**技能包 zip**、**服务端 zip**，Release Notes 写明：
    新增功能、修复问题、升级注意事项、已知限制。
 
 ## 九、安全提醒

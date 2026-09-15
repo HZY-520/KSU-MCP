@@ -8,7 +8,7 @@
 远端 MCP 客户端 ──HTTPS──> n.huziyang.top（本服务） ──WebSocket──> 手机 mcpd tunnel ──> 手机本地 MCP Server
 ```
 
-## WebUI 管理台（v1.2.0）
+## WebUI 管理台（v1.3.0）
 
 浏览器打开 **`https://n.huziyang.top/admin`**（本包默认账号 **admin / admin123**，**首次登录后请立即在「管理密码」处更换**）。
 新版管理台为卡片式 UI，**移动端自适应**，支持丝滑动画：
@@ -23,6 +23,16 @@
 - 安全：登录会话 7 天；连续 5 次密码错误锁定该 IP 10 分钟；Cookie HttpOnly + SameSite=Strict
 
 > 请务必通过 **HTTPS** 访问 /admin；Nginx 已反代整站，`/admin`、`/api/` 自动覆盖，无需额外配置。
+
+### v1.3.0（服务端功能未变，仅版本与包名对齐）
+
+- 自本版起，服务端发布包名与服务端 `VERSION`、所在 Release 版本三者一致：
+  **`ksu-mcp-tunnel-server-v1.3.0.zip`**。
+  （v1.2.0 / v1.2.1 两个 Release 中的服务端包都叫 `...-v1.2.0.zip` 但内容略有差异，
+  现已统一，避免包名与内容不一致的歧义。）
+- 本包已包含 v1.2.1 期间的两处改动：**心跳丢包统计**
+  （`pingsSent` / `pingsMissed` / `lossPercent`，见 `/api/metrics`）
+  与管理台**登录框不再预填默认用户名**。
 
 ### v1.2.0 稳定性升级（务必与设备端模块同步升级）
 

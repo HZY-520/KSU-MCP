@@ -4,6 +4,10 @@
  * 内网穿透服务端：设备（模块端 mcpd tunnel）主动连接本服务，远端 MCP 客户端
  * 通过 https://<域名>/mcp/<device> 访问设备上的 MCP 服务。
  *
+ * v1.3.0：服务端功能未变，仅版本号与发布包名对齐（本包在 v1.3.0 Release 中随设备端一同发布）。
+ *   v1.2.1 期间的两处改动已包含在本包内：心跳丢包统计（pingsSent/pingsMissed/lossPercent）
+ *   与管理台登录框不再预填默认用户名。
+ *
  * v1.2.0 变更：
  *  - 心跳 30s → 10s，连续 3 次未收到 pong（≈35s）即判定连接死亡并回收，
  *    与设备端 10s 心跳 / 35s 读超时严格对齐（旧版最坏 60s 才回收死连接）；
@@ -30,7 +34,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const APP_NAME = 'KSU MCP Tunnel Server';
 const MAX_PROXY_BODY = 16 * 1024 * 1024; // 代理请求体上限（与设备端一致）
 const TOKEN_RE = /^[A-Za-z0-9_.\-]{16,128}$/; // 自定义 Token 规则（留空则自动生成）

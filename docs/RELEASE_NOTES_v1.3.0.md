@@ -134,6 +134,10 @@ mkdir -p ~/.dsh/skills    && cp -r /tmp/ksu-skills/ksu-mcp ~/.dsh/skills/      #
 测试桩新增 `uiautomator` 与 `dumpsys window`，并让 `input` 桩把输入内容回写到 dump，
 从而真实覆盖 `verify` 分支。
 
+> **关于服务端包**：v1.2.0 / v1.2.1 两个 Release 中的服务端包都命名为 `...-v1.2.0.zip`，
+> 但内容存在细微差异（v1.2.1 那个包含后续的丢包指标与管理台修复），容易产生歧义。
+> 自 v1.3.0 起改为**包名与服务端 `VERSION`、Release 版本三者一致**，本版即 `ksu-mcp-tunnel-server-v1.3.0.zip`。
+
 > 说明：以上均在 Linux 服务器上以 `tests/fakebin/` 模拟 Android 命令验证解析与协议行为；
 > 真机相关项（具体 ROM 的 `uiautomator` 可用性、控件树节点完整度）需在设备上确认。
 
@@ -143,5 +147,6 @@ mkdir -p ~/.dsh/skills    && cp -r /tmp/ksu-skills/ksu-mcp ~/.dsh/skills/      #
 |---|---|
 | `ksu-mcp-server-v1.3.0.zip` | **KernelSU / Magisk 模块包**（含 arm64 + arm 双架构二进制、安装脚本、WebUI） |
 | **`ksu-mcp-skills-v1.3.0.zip`** | **AI 技能包**（SKILL.md + skill.json + reference/ + examples/） |
+| **`ksu-mcp-tunnel-server-v1.3.0.zip`** | **公网穿透服务端包**（server.js / admin.html / 配置样例 / Nginx 样例 / 部署手册；不含 config.json 与 node_modules）。服务端功能与 v1.2.1 相同（含丢包指标与管理台登录框修复），自本版起**包名与服务端 VERSION、Release 版本三者一致** |
 | `mcpd-arm64-v1.3.0` | 独立 arm64 二进制（aarch64，静态链接，已剥离符号） |
 | `mcpd-arm-v1.3.0` | 独立 arm 二进制（ARM EABI5，静态链接，已剥离符号） |
