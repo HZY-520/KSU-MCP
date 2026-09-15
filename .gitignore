@@ -7,3 +7,6 @@ tunnel-server/config.json
 # 系统文件
 .DS_Store
 *.swp
+
+# 测试运行时状态（fakebin 模拟 settings 的持久化文件）
+tests/fakebin/.settings.state*
