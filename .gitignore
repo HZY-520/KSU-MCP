@@ -10,3 +10,6 @@ tunnel-server/config.json
 
 # 测试运行时状态（fakebin 模拟 settings 的持久化文件）
 tests/fakebin/.settings.state*
+
+# 测试运行时状态（fakebin 模拟输入后的界面文本）
+tests/fakebin/.last_text

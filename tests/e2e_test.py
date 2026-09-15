@@ -40,7 +40,10 @@ TOKEN = "e2e-test-token-0123456789abcdef"
 TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 # 新增工具的命名规范：{service}_{action}_{resource}
 # action 集合按本项目实际语义确定。
-ANDROID_NAME_RE = re.compile(r"^android_(get|list|exec|input|toggle|set|read|write)_[a-z0-9_]+$")
+# 规范：{service}_{action}_{resource}（service 固定 android）。
+# action 是本项目自定的动词（get/list/exec/input/toggle/set/read/write/dump/find/tap/wait/scroll…），
+# 因此不写死动词表，只强制「android_ + action + resource 至少三段、全小写」。
+ANDROID_NAME_RE = re.compile(r"^android_[a-z][a-z0-9]*_[a-z0-9_]+$")
 # 任务书逐字指定的例外名（仅两段，无 resource）：android_screenshot。
 # 需求明确要求该名称，故作为「有据可查的例外」放行，并在 README 中标注。
 NAME_EXCEPTIONS = {"android_screenshot"}
@@ -172,6 +175,14 @@ def main():
     with open(os.path.join(DATA, "config.json"), "w") as f:
         json.dump(cfg, f)
 
+    # 工具数量从二进制动态推导（新增工具时测试无需改动，仅断言自洽）
+    _rc, _out = subprocess.run([binpath, "tools", "--json"], env=env,
+                               capture_output=True, text=True).returncode, None
+    _tj = json.loads(subprocess.run([binpath, "tools", "--json"], env=env,
+                                    capture_output=True, text=True).stdout)
+    EXP_TOTAL, EXP_CANON, EXP_DEPR = _tj["total"], _tj["canonical"], _tj["deprecated"]
+    print(f"二进制自报工具数: total={EXP_TOTAL} canonical={EXP_CANON} deprecated={EXP_DEPR}")
+
     # ---------------------------------------------------------- 1. stdio
     section("1. stdio 传输")
     c = StdioClient(binpath, env)
@@ -195,7 +206,7 @@ def main():
     r = c.call("tools/list")
     tools = r["result"]["tools"]
     names = [t["name"] for t in tools]
-    check(f"tools/list 返回 32 个工具（实际 {len(tools)}）", len(tools) == 32)
+    check(f"tools/list 数量与 CLI 自报一致（{EXP_TOTAL} 个，实际 {len(tools)}）", len(tools) == EXP_TOTAL)
     check("全部工具名符合 MCP 命名规范字符集/长度",
           all(TOOL_NAME_RE.match(n) for n in names),
           str([n for n in names if not TOOL_NAME_RE.match(n)]))
@@ -393,6 +404,151 @@ def main():
     check("弃用别名 screenshot 仍返回 JSON 文本",
           e is None and "data_base64" in o, f"{e}")
 
+    # ---------------------------------------------------------- 2.5 屏幕控件树
+    section("2.5 屏幕控件树工具（结构化数据替代截图）")
+    # 清掉上一步 android_input_text 留下的界面文本状态，保证从干净界面开始
+    try:
+        os.remove(os.path.join(FAKEBIN, ".last_text"))
+    except OSError:
+        pass
+
+    o, e = call_tool("android_get_screen_elements")
+    check("get_screen_elements 返回屏幕尺寸与元素列表",
+          e is None and o["meta"]["screen_width"] == 1080 and o["meta"]["screen_height"] == 2400
+          and o["count"] > 0, f"{e} {str(o)[:160]}")
+    labels = [el.get("label") for el in o.get("elements", [])]
+    check("可点击容器用子孙文本合成 label（微信 版本 8.0.49）",
+          any(l and l.startswith("微信") for l in labels), str(labels))
+    check("布尔标记仅在 true 时输出（clickable/editable/focused）",
+          any(el.get("clickable") for el in o["elements"])
+          and any(el.get("editable") for el in o["elements"])
+          and any(el.get("focused") for el in o["elements"]))
+    check("与祖先同文本的冗余节点被去重（设置 只剩 1 个可点击项）",
+          sum(1 for el in o["elements"] if el.get("label") == "设置") == 1,
+          str([el.get("label") for el in o["elements"]]))
+    check("每个元素都带 center 坐标（可直接点击）",
+          all(len(el.get("center", [])) == 2 for el in o["elements"]))
+    check("元素带 ref（同屏稳定序号）", all(isinstance(el.get("ref"), int) for el in o["elements"]))
+
+    o, e = call_tool("android_get_screen_elements", {"include_bounds": False})
+    check("include_bounds=false 时不返回 bounds（省 token）",
+          e is None and all("bounds" not in el for el in o["elements"]))
+    o, e = call_tool("android_get_screen_elements", {"filter": "密码"})
+    check("filter 命中密码框", e is None and o["count"] == 1 and o["elements"][0].get("editable") is True,
+          str(o)[:200])
+    o, e = call_tool("android_get_screen_elements", {"max_elements": 2})
+    check("max_elements 截断并置 truncated=true",
+          e is None and o["count"] == 2 and o["truncated"] is True)
+
+    o, e = call_tool("android_find_element", {"text": "设置"})
+    check("find_element 按文本命中可点击容器并给出点击建议",
+          e is None and o["total_matches"] == 1 and o["matches"][0].get("clickable") is True
+          and "hint" in o, f"{e} {str(o)[:160]}")
+    o, e = call_tool("android_find_element", {"editable": True})
+    check("find_element 按 editable 筛出 2 个输入框", e is None and o["total_matches"] == 2, str(o)[:120])
+    o, e = call_tool("android_find_element", {"password": True})
+    check("find_element 定位密码框", e is None and o["total_matches"] == 1
+          and o["matches"][0]["id"].endswith("pwd"))
+    o, e = call_tool("android_find_element", {"enabled": False})
+    check("find_element 定位被禁用控件", e is None and o["total_matches"] == 1
+          and o["matches"][0]["label"] == "不可用按钮", str(o)[:160])
+    o, e = call_tool("android_find_element", {"checked": True})
+    check("find_element 定位已勾选开关", e is None and o["total_matches"] == 1, str(o)[:120])
+    o, e = call_tool("android_find_element", {"scrollable": True})
+    check("find_element 定位可滚动容器", e is None and o["total_matches"] == 1
+          and "RecyclerView" in o["matches"][0]["class"], str(o)[:160])
+    o, e = call_tool("android_find_element", {"id_contains": "btn_ok"})
+    check("find_element 支持 id_contains", e is None and o["total_matches"] == 1
+          and o["matches"][0]["label"] == "确定")
+    o, e = call_tool("android_find_element", {"text_contains": "版本"})
+    check("find_element 支持 text_contains", e is None and o["total_matches"] >= 1, str(o)[:120])
+    o, e = call_tool("android_find_element", {})
+    check("find_element 缺选择器时返回 isError", e is not None)
+    o, e = call_tool("android_find_element", {"text": "绝对不存在的控件"})
+    check("find_element 未命中时给出排查建议",
+          e is None and o["total_matches"] == 0 and "hint" in o)
+
+    o, e = call_tool("android_dump_ui_hierarchy", {"format": "json", "max_nodes": 50})
+    check("dump_ui_hierarchy(json) 返回嵌套树与节点数",
+          e is None and o["returned_nodes"] > 0 and len(o["tree"]) > 0
+          and o["meta"]["total_nodes"] >= o["returned_nodes"], str(o)[:160])
+    o, e = call_tool("android_dump_ui_hierarchy", {"format": "xml"})
+    check("dump_ui_hierarchy(xml) 返回原始控件树 XML",
+          e is None and "<hierarchy" in o["xml"] and o["size_bytes"] > 500, str(o)[:120])
+    o, e = call_tool("android_dump_ui_hierarchy", {"format": "json", "max_nodes": 3})
+    check("dump_ui_hierarchy 遵守 max_nodes 并标记 truncated",
+          e is None and o["returned_nodes"] <= 4 and o["truncated"] is True, str(o.get("returned_nodes")))
+
+    open("/tmp/ksumcp-input.log", "w").close()
+    o, e = call_tool("android_tap_element", {"text": "设置"})
+    check("tap_element 一次调用完成「查找+点击」",
+          e is None and o["tapped"] is True and o["element"]["center"] == [540, 570],
+          f"{e} {str(o)[:200]}")
+    check("tap_element 下发了正确坐标的点击",
+          "input tap 540 570" in open("/tmp/ksumcp-input.log").read(),
+          open("/tmp/ksumcp-input.log").read()[:120])
+    check("tap_element 返回 match_total 与 changed",
+          o["match_total"] == 1 and isinstance(o["changed"], bool))
+    o, e = call_tool("android_tap_element", {"text": "绝对不存在"})
+    check("tap_element 未命中时 tapped=false（不误点）",
+          e is None and o["tapped"] is False and "hint" in o)
+    o, e = call_tool("android_tap_element", {"text": "确定", "verify": False})
+    check("tap_element 可关闭 verify（省一次控件树抓取）",
+          e is None and o["tapped"] is True and o["changed"] is False)
+
+    open("/tmp/ksumcp-input.log", "w").close()
+    o, e = call_tool("android_set_element_text",
+                     {"id": "com.example.demo:id/search", "content": "hello world"})
+    check("set_element_text 按 id 定位输入框并写入", e is None and o["filled"] is True, f"{e} {str(o)[:200]}")
+    _log = open("/tmp/ksumcp-input.log").read()
+    check("set_element_text 执行「聚焦→移到行尾→清空→输入」序列",
+          "input tap 540 1915" in _log and "input keyevent 123" in _log
+          and "input keyevent 67" in _log and "input text hello world" in _log, _log[:220])
+    check("set_element_text 写回校验 verified=true（读回文本等于目标）",
+          o.get("verified") is True and o.get("current_text") == "hello world", str(o)[:200])
+    o, e = call_tool("android_set_element_text", {"content": "x"})
+    check("set_element_text 缺选择器时返回 isError", e is not None)
+    o, e = call_tool("android_set_element_text", {"id": "com.example.demo:id/search"})
+    check("set_element_text 缺 content 时返回 isError", e is not None)
+
+    o, e = call_tool("android_wait_for_element", {"text": "设置", "timeout_ms": 3000})
+    check("wait_for_element 目标已存在时立即满足",
+          e is None and o["satisfied"] is True and o["state"] == "present", str(o)[:160])
+    o, e = call_tool("android_wait_for_element",
+                     {"text": "绝对不存在", "timeout_ms": 700, "interval_ms": 200})
+    check("wait_for_element 超时返回 satisfied=false 且记录轮询次数",
+          e is None and o["satisfied"] is False and o["polls"] >= 2, str(o)[:160])
+    o, e = call_tool("android_wait_for_element",
+                     {"text": "绝对不存在", "state": "absent", "timeout_ms": 700})
+    check("wait_for_element state=absent 对不存在控件立即满足",
+          e is None and o["satisfied"] is True)
+    o, e = call_tool("android_wait_for_element", {"ref": 0, "timeout_ms": 500})
+    check("wait_for_element 拒绝 ref（会随界面失效）", e is not None)
+
+    o, e = call_tool("android_scroll_to_element", {"text": "设置"})
+    check("scroll_to_element 目标已可见时不滚动",
+          e is None and o["found"] is True and o["scrolls"] == 0, str(o)[:160])
+    o, e = call_tool("android_scroll_to_element",
+                     {"text": "绝对不存在", "max_scrolls": 2, "settle_ms": 120})
+    check("scroll_to_element 找不到时滚动到上限并返回 found=false",
+          e is None and o["found"] is False and o["scrolls"] == 2, str(o)[:160])
+
+    o, e = call_tool("android_get_foreground_app")
+    check("get_foreground_app 解析出包名与完整 Activity",
+          e is None and o["package"] == "com.example.demo"
+          and o["activity"] == "com.example.demo.MainActivity", f"{e} {o}")
+    check("get_foreground_app 标注数据来源", o.get("source") == "dumpsys window", str(o))
+
+    # 截图工具保持原样（新增控件树工具不应影响它）
+    resp = c.call("tools/call", {"name": "android_screenshot", "arguments": {}})
+    _ct = (resp.get("result") or {}).get("content") or []
+    check("原有 android_screenshot 仍返回 image 内容块（未被改动）",
+          any(b.get("type") == "image" for b in _ct), str([b.get("type") for b in _ct]))
+    resp = c.call("tools/call", {"name": "screenshot", "arguments": {}})
+    _txt = (resp.get("result") or {}).get("content") or []
+    check("弃用别名 screenshot 仍返回 JSON 文本（未被改动）",
+          any(b.get("type") == "text" and "data_base64" in b.get("text", "") for b in _txt))
+
     c.close()
 
     # ---------------------------------------------------------- 3. HTTP 传输
@@ -435,7 +591,7 @@ def main():
         st, _, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
                            headers={**auth_hdr(), "Mcp-Session-Id": sid})
         check("携带有效会话调用 tools/list 成功",
-              st == 200 and len(json.loads(body)["result"]["tools"]) == 32, str(st))
+              st == 200 and len(json.loads(body)["result"]["tools"]) == EXP_TOTAL, str(st))
 
         st, _, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 4, "method": "tools/list"},
                            headers={**auth_hdr(), "Mcp-Session-Id": "bogus-session"})
@@ -509,9 +665,10 @@ def main():
         check("每个地址都带鉴权方式说明（auth_type/auth_hint）",
               all(e.get("auth_type") and e.get("auth_hint")
                   for grp in ("local", "lan", "public") for e in eps.get(grp, [])))
-        check("/api/state 报告工具统计（21 规范 + 11 弃用）",
-              stobj["tools"]["canonical"] == 21 and stobj["tools"]["deprecated"] == 11,
-              str(stobj.get("tools", {}).get("total")))
+        check(f"/api/state 报告工具统计（{EXP_CANON} 规范 + {EXP_DEPR} 弃用）",
+              stobj["tools"]["canonical"] == EXP_CANON and stobj["tools"]["deprecated"] == EXP_DEPR
+              and stobj["tools"]["total"] == EXP_TOTAL,
+              str(stobj.get("tools")))
         check("/api/state 报告隧道心跳/超时/退避参数",
               stobj["tunnel"]["heartbeat_sec"] == 10 and stobj["tunnel"]["read_timeout_sec"] == 35
               and stobj["tunnel"]["backoff_max_sec"] == 30, str(stobj.get("tunnel")))
@@ -526,7 +683,7 @@ def main():
         st, _, body = http("GET", "/api/tools", headers=auth_hdr())
         t = json.loads(body)
         check("/api/tools 返回全部工具与参数列表",
-              st == 200 and t["total"] == 32
+              st == 200 and t["total"] == EXP_TOTAL
               and any(x["name"] == "android_list_packages"
                       and "offset" in x["params"] for x in t["tools"]))
         check("/api/tools 标注弃用与替代关系",
@@ -598,8 +755,9 @@ def main():
 
     rc, out = cli(["tools", "--json"])
     tj = json.loads(out)
-    check("mcpd tools --json 报告 32 个工具（21 规范 + 11 弃用）",
-          tj["total"] == 32 and tj["canonical"] == 21 and tj["deprecated"] == 11, str(tj)[:120])
+    check(f"mcpd tools --json 报告 {EXP_TOTAL} 个工具（{EXP_CANON} 规范 + {EXP_DEPR} 弃用）",
+          tj["total"] == EXP_TOTAL and tj["canonical"] == EXP_CANON and tj["deprecated"] == EXP_DEPR,
+          str(tj)[:120])
 
     rc, out = cli(["ui-bootstrap"])
     ub = json.loads(out)

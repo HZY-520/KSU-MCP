@@ -1,5 +1,7 @@
 #!/bin/sh
-if [ "$1" = "battery" ]; then
+# 模拟 Android dumpsys
+case "$1" in
+  battery)
 cat <<'EOF'
 Current Battery Service state:
   AC powered: false
@@ -11,4 +13,20 @@ Current Battery Service state:
   temperature: 312
   technology: Li-ion
 EOF
-fi
+;;
+  window)
+cat <<'EOF'
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Display: mDisplayId=0
+    mCurrentFocus=Window{2f1e0a3 u0 com.example.demo/com.example.demo.MainActivity}
+    mFocusedApp=ActivityRecord{1a2b3c u0 com.example.demo/.MainActivity t123}
+EOF
+;;
+  activity)
+cat <<'EOF'
+ACTIVITY MANAGER ACTIVITIES (dumpsys activity activities)
+  mResumedActivity: ActivityRecord{1a2b3c u0 com.example.demo/.MainActivity t123}
+EOF
+;;
+esac
+exit 0

@@ -248,8 +248,11 @@ def main():
 
         st, _, r = mcp_call(admin, base, CLIENT_TOKEN, "tools/list", {},
                             extra_headers={"Mcp-Session-Id": sid})
-        check("远端 tools/list 返回 32 个工具",
-              st == 200 and len(r["result"]["tools"]) == 32, str(st))
+        # 工具数量与二进制自报一致（新增工具时无需改测试）
+        _tj = json.loads(subprocess.run([binpath, "tools", "--json"], env=env,
+                                        capture_output=True, text=True).stdout)
+        check(f"远端 tools/list 数量与二进制自报一致（{_tj['total']} 个）",
+              st == 200 and len(r["result"]["tools"]) == _tj["total"], str(st))
 
         st, _, r = mcp_call(admin, base, CLIENT_TOKEN, "tools/call",
                             {"name": "android_get_device_info", "arguments": {}},

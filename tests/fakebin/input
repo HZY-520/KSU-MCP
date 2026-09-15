@@ -1,3 +1,10 @@
 #!/bin/sh
+# 模拟 Android input：记录调用；text 子命令会把内容写入 .last_text，
+# 供 uiautomator 桩模拟「输入后界面上的文本真的变了」，从而能验证 verify 分支
+DIR="$(dirname "$0")"
 echo "input $*" >> /tmp/ksumcp-input.log
+if [ "$1" = "text" ]; then
+  shift
+  printf '%s' "$*" > "$DIR/.last_text"
+fi
 exit 0

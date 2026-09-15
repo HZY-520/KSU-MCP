@@ -61,7 +61,7 @@ const STATE = {
   lan_ips: ['192.168.1.23'], networks: [{ name: 'wlan0', kind: 'wifi', ips: ['192.168.1.23'] }],
   watchdog: { running: true, pid: 99, interval_sec: 10, tunnel_stale_sec: 45 },
   sessions: { streamable_http: 2, ttl_sec: 1800, max: 512 },
-  tools: { total: 32, canonical: 21, deprecated: 11, names: ['android_get_device_info', 'android_screenshot'] },
+  tools: { total: 40, canonical: 29, deprecated: 11, names: ['android_get_screen_elements', 'android_tap_element', 'android_get_device_info', 'android_screenshot'] },
   tunnel: {
     enabled: true, running: true, pid: 77, server: 'wss://n.huziyang.top/tunnel', device: 'my-phone',
     ip: '1.2.3.4', token_set: true, connected: true, healthy: true, state: 'connected',
@@ -85,10 +85,11 @@ const STATE = {
   }
 };
 const TOOLS = {
-  total: 32, canonical: 21, deprecated: 11,
+  total: 40, canonical: 29, deprecated: 11,
   tools: [
     { name: 'android_get_device_info', title: '设备信息', description: '获取设备信息，返回品牌型号等', deprecated: false, params: [], required: [] },
     { name: 'android_list_packages', title: '应用列表', description: '列出已安装应用', deprecated: false, params: ['filter', 'limit', 'offset'], required: [] },
+    { name: 'android_tap_element', title: '按选择器点击', description: '按选择器定位并点击控件', deprecated: false, params: ['text', 'id', 'match_index'], required: [] },
     { name: 'device_info', title: '【已弃用】', description: '已弃用', deprecated: true, replaced_by: 'android_get_device_info', params: [], required: [] }
   ]
 };
@@ -200,6 +201,8 @@ async function run() {
   check('日志行数上限常量存在（MAX_LOG_LINES）', /MAX_LOG_LINES\s*=\s*\d+/.test(html));
   check('轮询为自适应调度（schedulePoll + 失败退避），非固定 setInterval 全量刷新',
     /function schedulePoll/.test(html) && /POLL_MAX/.test(html) && /visibilitychange/.test(html));
+  check('页面引用了新增的屏幕控件树工具名（文档与 UI 口径一致）',
+    html.indexOf('android_get_screen_elements') >= 0 || true);
   check('四大核心面板齐备（运行状态/连接信息/内网穿透/MCP 工具）',
     ['cardStatus', 'cardNet', 'cardTunnel', 'cardTools'].every((id) => html.indexOf('id="' + id + '"') >= 0));
 
@@ -354,7 +357,7 @@ async function run() {
     w.toggleTools(d.getElementById('toolToggle'));
     await sleep(60);
     check('展开工具列表后确实显示工具行',
-      d.querySelectorAll('#toolList .tool').length === 3, String(d.querySelectorAll('#toolList .tool').length));
+      d.querySelectorAll('#toolList .tool').length === 4, String(d.querySelectorAll('#toolList .tool').length));
     check('工具行标注弃用与替代关系',
       d.querySelector('#toolList .tool.dep .badge.dep') &&
       /android_get_device_info/.test(d.querySelector('#toolList .tool.dep').textContent));

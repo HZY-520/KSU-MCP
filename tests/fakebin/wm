@@ -1,0 +1,5 @@
+#!/bin/sh
+case "$1" in
+  size) echo "Physical size: 1080x2400" ;;
+  *) exit 1 ;;
+esac

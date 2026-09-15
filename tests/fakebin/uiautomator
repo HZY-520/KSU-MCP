@@ -1,0 +1,19 @@
+#!/bin/sh
+# 模拟 uiautomator dump [--compressed] <path>
+DIR="$(dirname "$0")"
+out=""
+for a in "$@"; do
+  case "$a" in
+    dump|--compressed) ;;
+    *) out="$a" ;;
+  esac
+done
+[ -n "$out" ] || { echo "Usage: uiautomator dump [--compressed] <file>" >&2; exit 1; }
+if [ -s "$DIR/.last_text" ]; then
+  txt=$(cat "$DIR/.last_text")
+  sed "s|text=\"搜索内容\"|text=\"$txt\"|g" "$DIR/ui_dump.xml" > "$out" || exit 1
+else
+  cp "$DIR/ui_dump.xml" "$out" || exit 1
+fi
+echo "UI hierchary dumped to: $out"
+exit 0
