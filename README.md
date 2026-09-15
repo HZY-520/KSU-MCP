@@ -310,6 +310,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "-s -w" 
 cd src && go test -race ./...
 
 # 2) MCP 协议端到端：stdio + Streamable HTTP + 控制 API + 全部工具解析正确性
+#    + CLI 契约（start/restart/stop/watchdog-status 退出码、ui-state、tools、logs）
 #    借助 tests/fakebin 下的 Android 命令模拟器，在 Linux 上验证真实解析逻辑
 python3 tests/e2e_test.py
 

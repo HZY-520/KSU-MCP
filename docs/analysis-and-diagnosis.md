@@ -285,7 +285,7 @@ WebUI 已按「**优先 `fetch` 本地 API，失败自动回退 `ksu.exec`**」�
 | 测试 | 用例数 | 结果 | 命令 |
 |---|---|---|---|
 | Go 单元测试（含 `-race`） | 25 个测试函数 | 全部通过 | `cd src && go test -race ./...` |
-| MCP 协议端到端（含全部工具解析正确性） | 87 项断言 | 全部通过 | `python3 tests/e2e_test.py` |
+| MCP 协议端到端（含全部工具解析正确性 + CLI 契约） | 106 项断言 | 全部通过 | `python3 tests/e2e_test.py` |
 | 隧道端到端（真实 Node 服务端 + 真实 mcpd） | 41 项断言 | 全部通过 | `python3 tests/tunnel_e2e_test.py` |
 | WebUI jsdom 冒烟 + 性能约定回归 | 68 项断言 | 全部通过 | `node tests/webui_test.js` |
 | 稳定性长跑 | 2 小时 / 10s 采样 | 见 `tests/soak_test.py` 输出的 `soak.json` | `python3 tests/soak_test.py 7200 10` |

@@ -545,6 +545,93 @@ def main():
         except Exception:
             daemon.kill()
 
+    # ---------------------------------------------------------- 5. CLI 契约
+    section("5. CLI 契约（开机脚本依赖项）")
+
+    def cli(args, env=None, timeout=40):
+        """执行 mcpd 子命令，返回 (exit_code, stdout)"""
+        r = subprocess.run([binpath] + args, env=env or env_base,
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout
+
+    env_base = dict(env)
+    cli(["stop"])
+    rc, _ = cli(["watchdog-status"])
+    check("watchdog-status 未运行时退出码为 2（service.sh / boot-completed.sh 依赖此语义）",
+          rc == 2, str(rc))
+    rc, out = cli(["watchdog-status"])
+    check("watchdog-status 输出可解析的 JSON",
+          json.loads(out).get("running") is False)
+
+    rc, out = cli(["start"])
+    check("mcpd start 拉起守护并返回 0", rc == 0, f"{rc} {out.strip()[:80]}")
+    rc, out = cli(["watchdog-status"])
+    check("watchdog-status 运行中退出码为 0", rc == 0, f"{rc} {out.strip()[:80]}")
+    check("mcpd start 的 JSON 含 interval_sec 与 tunnel_stale_sec",
+          json.loads(out).get("interval_sec") == 10 and json.loads(out).get("tunnel_stale_sec") == 45)
+
+    up = False
+    for _ in range(40):
+        try:
+            s2, _, _ = http("GET", "/health")
+            if s2 == 200:
+                up = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.25)
+    check("watchdog 自动拉起 daemon 并通过 /health 探活", up)
+
+    rc, out = cli(["restart"])
+    check("mcpd restart（原子重启）返回 0", rc == 0, f"{rc} {out.strip()[:120]}")
+    up = False
+    for _ in range(40):
+        try:
+            s2, _, _ = http("GET", "/health")
+            if s2 == 200:
+                up = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.25)
+    check("restart 后 daemon 恢复可用", up)
+
+    rc, out = cli(["tools", "--json"])
+    tj = json.loads(out)
+    check("mcpd tools --json 报告 32 个工具（21 规范 + 11 弃用）",
+          tj["total"] == 32 and tj["canonical"] == 21 and tj["deprecated"] == 11, str(tj)[:120])
+
+    rc, out = cli(["ui-bootstrap"])
+    ub = json.loads(out)
+    check("mcpd ui-bootstrap 返回 port/token/api_base 供 WebUI 引导",
+          rc == 0 and ub["port"] == PORT and ub["has_token"] is True
+          and ub["api_base"] == f"http://127.0.0.1:{PORT}", str(ub)[:140])
+
+    rc, out = cli(["ui-state"])
+    us = json.loads(out)
+    check("mcpd ui-state 为单次聚合调用（含 endpoints/tunnel/tools/watchdog）",
+          rc == 0 and all(k in us for k in ("endpoints", "tunnel", "tools", "watchdog", "sessions")))
+    check("mcpd ui-state 的隧道段含真实连接态与心跳参数（非仅 pid）",
+          us["tunnel"]["heartbeat_sec"] == 10 and us["tunnel"]["read_timeout_sec"] == 35
+          and "connected" in us["tunnel"] and "state" in us["tunnel"], str(us["tunnel"])[:140])
+
+    for src in ("mcpd", "watchdog"):
+        rc, out = cli(["logs", "5", "--source", src])
+        check(f"mcpd logs --source {src} 可用", rc == 0, str(rc))
+    rc, _ = cli(["logs", "5", "--source", "tunnel"])
+    check("日志文件缺失时 mcpd logs 优雅退出（不崩溃、返回 0）", rc == 0, str(rc))
+
+    rc, _ = cli(["config-set", "--port", "9123"])
+    check("config-set 保存并回显配置", rc == 0, str(rc))
+    rc, out = cli(["version"])
+    check("mcpd version 返回语义化版本", rc == 0 and re.fullmatch(r"\d+\.\d+\.\d+", out.strip()) is not None,
+          out.strip())
+
+    rc, _ = cli(["stop"])
+    check("mcpd stop 停止全部并返回 0", rc == 0, str(rc))
+    rc, _ = cli(["watchdog-status"])
+    check("stop 后 watchdog-status 回到退出码 2", rc == 2, str(rc))
+
     # ---------------------------------------------------------- 汇总
     print("\n" + "=" * 60)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
