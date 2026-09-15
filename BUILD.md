@@ -1,8 +1,20 @@
-# KSU MCP 全栈 · 构建与发布说明（v1.2.0）
+# KSU MCP 全栈 · 构建与发布说明（v1.2.1）
 
-本仓库为 **KSU MCP Server v1.2.0 全栈**源码：手机端 KernelSU/Magisk 模块（Go）+ 公网穿透服务端（Node.js）。
+本仓库为 **KSU MCP Server v1.2.1 全栈**源码：手机端 KernelSU/Magisk 模块（Go）+ 公网穿透服务端（Node.js）。
 
-## 一、v1.2.0 相对 v1.1.0 的变更
+## 一、v1.2.1 相对 v1.2.0 的变更（补丁）
+
+- **修复隧道运行态落盘竞态**：快照在锁内取、文件在锁外写，多 goroutine 并发落盘时
+  旧快照覆盖新快照（丢更新），且共用同一 `.tmp` 路径可能互相踩踏。
+  现改为 `writeMu` 串行化 + 写入前重新取最新快照；新增并发回归测试
+  `TestTunnelStateConcurrentPersist`。
+- **修复 `bytes_out` 恒为 0**：该字段从未累加，WebUI「收发字节」恒显示 0 B；
+  `writeTunnelJSON()` 改为 `Marshal + WriteMessage` 并统计真实写入字节。
+- 测试增强：隧道 e2e 38 → 41 项断言，Go 单测 24 → 25 个测试函数（`go test -race` 通过）。
+
+> v1.2.0 的 tag 与 Release 保留不动以便追溯。
+
+## 二、v1.2.0 相对 v1.1.0 的变更
 
 ### 新增能力
 
@@ -43,7 +55,7 @@
 - 修复 shell 脚本用 `grep '"running": true'` 解析 JSON 的脆弱耦合，改用 `watchdog-status` 退出码。
 - `module/README.md` 不再是根 README 的逐字节副本，改为模块运维专章。
 
-## 二、目录结构
+## 三、目录结构
 
 ```
 ksu-mcp/
@@ -89,7 +101,7 @@ ksu-mcp/
 > 二进制（`module/bin/{arm64,arm}/mcpd`）**不入库**，按第三节从源码重建；
 > `tunnel-server/config.json`（含真实 Token）已在 `.gitignore` 中忽略。
 
-## 三、构建客户端模块 zip（手机端）
+## 四、构建客户端模块 zip（手机端）
 
 ```bash
 # 0) 准备 Go 1.23+（仓库源码 go.mod 声明 go 1.23）
@@ -109,10 +121,10 @@ cd src && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/mcpd-test . && 
 
 # 3) 打包模块（zip 内必须直接是模块文件，不能再套一层目录；
 #    正式发布包必须同时包含 arm64 与 arm 两个架构目录，便于同一 zip 兼容两种设备）
-cd module && zip -r ../ksu-mcp-server-v1.2.0.zip . -x "*.DS_Store" && cd ..
+cd module && zip -r ../ksu-mcp-server-v1.2.1.zip . -x "*.DS_Store" && cd ..
 
 # 3b) 校验 zip 结构（根目录应直接是 module.prop，且双架构二进制均存在）
-unzip -l ksu-mcp-server-v1.2.0.zip | grep -E "module.prop|bin/(arm64|arm)/mcpd"
+unzip -l ksu-mcp-server-v1.2.1.zip | grep -E "module.prop|bin/(arm64|arm)/mcpd"
 ```
 
 > 打包说明：`customize.sh` 在安装时按架构把 `bin/<arch>/mcpd` 移到 `bin/mcpd` 并删除另一架构目录。
@@ -123,7 +135,7 @@ unzip -l ksu-mcp-server-v1.2.0.zip | grep -E "module.prop|bin/(arm64|arm)/mcpd"
   mcpd 在代码内自动加载（`androidCACertPool`），无需额外配置；
 - 隧道支持 `tunnel.ip` 直连兜底：手机 DNS 异常时直连服务端公网 IP，TLS 仍按域名校验。
 
-## 四、构建/部署服务端（VPS / 宝塔）
+## 五、构建/部署服务端（VPS / 宝塔）
 
 ```bash
 cd tunnel-server
@@ -135,11 +147,11 @@ node server.js                  # 或 pm2 start server.js --name ksu-mcp-tunnel
 
 部署详见 `tunnel-server/README.md`（宝塔 Node 项目 + Nginx 反代 + WebSocket Upgrade + SSL）。
 
-## 五、测试与验收
+## 六、测试与验收
 
 ```bash
-# 1) Go 单元测试（命名规范 / 协议协商 / 路径隔离 / 退避抖动 / URL 推导 / 注册表一致性）
-cd src && go test ./... && cd ..
+# 1) Go 单元测试（命名规范 / 协议协商 / 路径隔离 / 退避抖动 / URL 推导 / 注册表一致性 / 并发落盘）
+cd src && go test -race ./... && cd ..
 
 # 2) MCP 协议端到端（stdio + Streamable HTTP + 会话生命周期 + 控制 API + 全工具解析正确性）
 python3 tests/e2e_test.py
@@ -158,16 +170,16 @@ python3 tests/soak_test.py 7200 10
 
 验收结论请以各测试脚本的最终汇总行为准（全部用例通过 / 失败明细）。
 
-## 六、发布清单
+## 七、发布清单
 
 1. 版本号三处同步：`src/main.go` 的 `appVersion`、`module/module.prop` 的
    `version`/`versionCode`、本文档与 README 标题。
 2. 双架构二进制重建并确认 `file module/bin/*/mcpd` 为 ARM ELF（arm64 为 aarch64，arm 为 ARM EABI5）。
-3. 打包 `ksu-mcp-server-v1.2.0.zip`，**必须包含** `bin/arm64/mcpd` 与 `bin/arm/mcpd`。
+3. 打包 `ksu-mcp-server-v1.2.1.zip`，**必须包含** `bin/arm64/mcpd` 与 `bin/arm/mcpd`。
 4. 确认不提交敏感信息：`tunnel-server/config.json`、任何真实 Token、`node_modules/`。
 5. 创建 GitHub Release，上传 zip，Release Notes 写明：新增功能、修复问题、升级注意事项、已知限制。
 
-## 七、安全提醒
+## 八、安全提醒
 
 - 两个 Token（tunnelToken / clientToken）请用随机源生成并妥善保管，泄露立即更换；
 - WebUI 管理台仅经 HTTPS 访问，连续 5 次登录失败锁定 IP 10 分钟；

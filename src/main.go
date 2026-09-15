@@ -6,6 +6,12 @@
 //	Streamable HTTP（HTTP，POST/GET/DELETE /mcp，Bearer Token 鉴权）
 //	SSE（HTTP，/sse，供老客户端兼容）
 //
+// v1.2.1 修复（相对 v1.2.0）：
+//   - 隧道运行态落盘竞态：快照在锁内取、文件在锁外写，多 goroutine 并发落盘时
+//     旧快照会覆盖新快照（丢更新），且共用同一 .tmp 路径可能互相踩踏。
+//     已改为 writeMu 串行化 + 写入前重新取最新快照。
+//   - BytesOut 只被声明与读取、从未累加，导致 WebUI「收发字节」恒显示 0 B。
+//
 // v1.2.0 变更摘要：
 //   - MCP 协议版本协商至 2025-11-25，兼容 2025-06-18 / 2025-03-26 / 2024-11-05
 //   - 新增 14 个 android_{action}_{resource} 规范命名工具；原有 11 个扁平命名工具保留并标记弃用
@@ -34,7 +40,7 @@ import (
 )
 
 const (
-	appVersion      = "1.2.0"
+	appVersion      = "1.2.1"
 	serverName      = "ksu-mcpd"
 	protocolVersion = "2025-11-25"
 

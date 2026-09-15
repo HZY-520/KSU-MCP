@@ -4,11 +4,26 @@
 开机自启、进程守护、WebUI 控制台、**Streamable HTTP（新版协议）+ SSE 双传输**、**局域网访问**、**内网穿透（设备为隧道客户端，配合 Node.js 服务端）**，
 让 Cherry Studio / ChatBox / Claude 等 MCP 客户端在**任何网络环境**下调用设备能力（root shell、文件、系统信息、屏幕与输入注入等）。
 
-> **当前版本：v1.2.0** · 协议：MCP **2025-11-25**（兼容 2025-06-18 / 2025-03-26 / 2024-11-05）· 工具：**32 个**（21 个规范命名 + 11 个弃用别名）
+> **当前版本：v1.2.1** · 协议：MCP **2025-11-25**（兼容 2025-06-18 / 2025-03-26 / 2024-11-05）· 工具：**32 个**（21 个规范命名 + 11 个弃用别名）
 
 ---
 
-## 一、v1.2.0 变更速览
+## 一、v1.2.1 补丁说明
+
+v1.2.1 修复 v1.2.0 的两个缺陷，功能与工具集不变（**建议 v1.2.0 用户升级**）：
+
+1. **隧道运行态落盘竞态**：`tunnel.runtime.json` 的快照在锁内取、文件在锁外写，
+   多个 `handleTunnelRequest` goroutine 并发落盘时**旧快照会覆盖新快照**（丢更新、状态回退），
+   且共用同一 `.tmp` 路径可能互相踩踏。运行态文件既是 WebUI 隧道状态的唯一真实来源，
+   也是 watchdog 判定「是否卡死」的判据，回退会导致误判。现改为 `writeMu` 串行化 +
+   写入前重新获取最新快照，并新增并发回归测试（`go test -race` 通过）。
+2. **`bytes_out` 恒为 0**：该字段只被声明与读取、从未累加，导致 WebUI 内网穿透面板的
+   「收发字节」恒显示 `0 B`。现将 `writeTunnelJSON()` 改为 `Marshal + WriteMessage`
+   并累计真实写入字节数（顺带省掉 `WriteJSON` 的二次序列化）。
+
+> v1.2.0 的 tag 与 Release 保留不动以便追溯，建议直接使用 v1.2.1。
+
+## 二、v1.2.0 变更速览
 
 | 方向 | 变更 |
 |---|---|
@@ -23,7 +38,7 @@
 
 ---
 
-## 二、包含内容
+## 三、包含内容
 
 | 组件 | 说明 |
 |---|---|
@@ -35,9 +50,9 @@
 | `customize.sh` | 安装脚本：架构检测、配置初始化、立即拉起守护 |
 | `tunnel-server/` | **Node.js 内网穿透服务端**（部署到公网 VPS，域名 `n.huziyang.top`） |
 
-## 三、安装
+## 四、安装
 
-1. 将 `ksu-mcp-server-v1.2.0.zip` 推送到手机（任意目录）。
+1. 将 `ksu-mcp-server-v1.2.1.zip` 推送到手机（任意目录）。
 2. 打开 **KernelSU Manager** → 底部「模块」→ 右上角「＋」→ 选择 zip 安装。
 3. 安装完成后建议 **重启一次**（或稍等片刻，service.sh 会自动拉起服务）。
 4. 在「模块」列表点击该模块，即可看到 **WebUI 控制台** 入口。
@@ -49,7 +64,7 @@
 > 从 v1.1.0 升级：可直接覆盖安装（配置与 `/data/adb/ksu_mcp` 自动保留）；建议升级后进入 WebUI 确认隧道已连接。
 > 卸载：Manager 中移除模块即可；残留数据目录 `/data/adb/ksu_mcp` 可手动删除。
 
-## 四、快速验证
+## 五、快速验证
 
 ```sh
 mcpd status            # 运行状态（JSON：端口/Token/三网络地址/watchdog/隧道质量指标/工具数）
@@ -59,7 +74,7 @@ mcpd watchdog-status   # 守护状态（退出码 0=运行中 / 2=未运行）
 mcpd tunnel-status     # 隧道状态（JSON：连接态/延迟/重连次数/流量/最后错误）
 ```
 
-## 五、MCP 客户端接入（三个网络层级）
+## 六、MCP 客户端接入（三个网络层级）
 
 | 网络层级 | 地址 | 适用场景 | 鉴权 |
 |---|---|---|---|
@@ -78,9 +93,9 @@ mcpd tunnel-status     # 隧道状态（JSON：连接态/延迟/重连次数/流
 /data/adb/modules/ksu_mcp/bin/mcpd
 ```
 
-## 六、内置工具（32 个）
+## 七、内置工具（32 个）
 
-### 6.1 规范命名工具（21 个，推荐使用）
+### 7.1 规范命名工具（21 个，推荐使用）
 
 命名遵循 MCP 2025-11-25 规范的 `{service}_{action}_{resource}` 三段式，`service` 固定为 `android`。
 
@@ -126,7 +141,7 @@ mcpd tunnel-status     # 隧道状态（JSON：连接态/延迟/重连次数/流
 **命名例外**：任务书逐字指定的 `android_screenshot` 仅两段（无 `_{resource}`），
 作为**有据可查的例外**保留；其余 20 个规范工具均为严格三段式（测试中已断言）。
 
-### 6.2 弃用别名（11 个，保留兼容）
+### 7.2 弃用别名（11 个，保留兼容）
 
 `device_info` `exec_command` `read_file` `write_file` `list_dir` `app_list` `battery_info` `network_info` `screenshot` `clipboard_get` `getprop`
 
@@ -136,7 +151,7 @@ mcpd tunnel-status     # 隧道状态（JSON：连接态/延迟/重连次数/流
 `screenshot→android_screenshot`、`clipboard_get→android_get_clipboard`、`getprop→android_get_prop`、
 `read_file→android_read_file`、`write_file→android_write_file`、`list_dir→android_list_dir`。
 
-## 七、配置与安全
+## 八、配置与安全
 
 配置文件：`/data/adb/ksu_mcp/config.json`
 
@@ -181,7 +196,7 @@ mcpd config-set --tunnel-enable true --tunnel-server wss://n.huziyang.top/tunnel
 **安全提醒**：隧道把设备的 root shell 能力暴露到公网，两个 Token 必须足够长、妥善保管。
 设备端 `/api/*` 控制 API **不会**经隧道转发（含 `/mcp/../api/state` 等穿越写法），本机 Token 不会外泄。
 
-## 八、CLI 命令速查
+## 九、CLI 命令速查
 
 ```sh
 mcpd                        # stdio 模式（默认）
@@ -212,7 +227,7 @@ mcpd init-config            # 初始化配置文件
 > 开机由 service.sh / boot-completed.sh 在 init 上下文拉起 watchdog，
 > 因此**关闭 KernelSU Manager、离开 WebUI 页面都不会中断服务**。
 
-## 九、内网穿透（模块为客户端 + Node.js 服务端）
+## 十、内网穿透（模块为客户端 + Node.js 服务端）
 
 架构：**手机模块作为隧道客户端主动外连服务端**（WebSocket，无需端口映射），远端 MCP 客户端通过公网域名访问设备。
 
@@ -220,7 +235,7 @@ mcpd init-config            # 初始化配置文件
 远端 MCP 客户端 ──HTTPS──> n.huziyang.top（Node 服务端） ──WebSocket──> 手机 mcpd tunnel ──> 手机本地 MCP Server
 ```
 
-### 9.1 服务端部署（一次性）
+### 10.1 服务端部署（一次性）
 
 1. 把 `tunnel-server/` 上传到 VPS：`scp -r tunnel-server root@your-vps:/opt/ksu-mcp-tunnel`
 2. `cd /opt/ksu-mcp-tunnel && npm install`
@@ -237,7 +252,7 @@ mcpd init-config            # 初始化配置文件
 > 并提供重置 Token、踢下线、移动端适配的卡片式 UI，以及**设备级连接质量指标**
 > （心跳延迟、重连次数、请求/失败数、收发流量、本次/累计在线时长、离线原因）。
 
-### 9.2 设备端启用
+### 10.2 设备端启用
 
 WebUI「内网穿透」卡片填写：服务器 `wss://n.huziyang.top/tunnel`、设备名（与 `devices` 键一致）、Token（tunnelToken），保存并连接；或 CLI：
 
@@ -250,11 +265,11 @@ mcpd tunnel --detach
 > **Token 不回显**：WebUI 的 Token 输入框始终留空，留空即表示「沿用已保存的 Token」。
 > 这样既避免密钥往返浏览器，也不会出现「必须先重填 Token 才能保存」的卡点。
 
-### 9.3 远端客户端接入
+### 10.3 远端客户端接入
 
 - 类型：Streamable HTTP；URL：`https://n.huziyang.top/mcp/<设备名>`；鉴权：`Bearer <clientToken>`
 
-## 十、稳定性设计参数
+## 十一、稳定性设计参数
 
 | 参数 | 值 | 说明 |
 |---|---|---|
@@ -271,7 +286,7 @@ mcpd tunnel --detach
 | 隧道转发分片 | 64KB / 单帧阈值 256KB | 大响应与长流稳定性 |
 | GET 长流空闲超时 | 30 分钟 | 其余请求 90s |
 
-## 十一、自行编译与测试
+## 十二、自行编译与测试
 
 需要 **Go 1.23+**（模块依赖 `github.com/gorilla/websocket`），源码位于 `src/`：
 
@@ -287,11 +302,12 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "-s -w" 
 - TLS 证书校验依赖 **Android 系统 CA 目录**，mcpd 已在代码内自动加载（`androidCACertPool`）；
 - 隧道支持 `tunnel.ip` 直连兜底：手机 DNS 异常时直连服务端公网 IP，TLS 仍按域名校验。
 
-### 测试套件（v1.2.0 新增）
+### 测试套件（v1.2.0 新增，v1.2.1 增强）
 
 ```sh
-# 1) Go 单元测试：命名规范 / 协议协商 / 路径隔离 / 退避抖动 / URL 推导 / 注册表一致性
-cd src && go test ./...
+# 1) Go 单元测试：命名规范 / 协议协商 / 路径隔离 / 退避抖动 / URL 推导 /
+#    注册表一致性 / 运行态并发落盘无丢更新
+cd src && go test -race ./...
 
 # 2) MCP 协议端到端：stdio + Streamable HTTP + 控制 API + 全部工具解析正确性
 #    借助 tests/fakebin 下的 Android 命令模拟器，在 Linux 上验证真实解析逻辑
@@ -308,7 +324,7 @@ npm install jsdom && NODE_PATH=$PWD/node_modules node tests/webui_test.js
 python3 tests/soak_test.py 7200 10
 ```
 
-## 十二、目录布局
+## 十三、目录布局
 
 ```
 ksu-mcp/
@@ -338,11 +354,11 @@ ksu-mcp/
 │   └── README.md               #   部署手册
 ├── tests/                      # 自动化测试（e2e / tunnel e2e / webui / soak + fakebin）
 └── docs/
-    ├── analysis-and-diagnosis.md  # v1.2.0 现状分析与六大问题根因诊断报告
+    ├── analysis-and-diagnosis.md   # 现状分析与六大问题根因诊断报告
     └── architecture.html          # 系统架构图（浏览器打开）
 ```
 
-## 十三、已知限制
+## 十四、已知限制
 
 - 仅支持 arm64 / arm 设备（x86_64 模拟器需按第十一节自行编译）。
 - `android_screenshot` / `android_get_clipboard` / `android_set_clipboard` 依赖系统 `screencap` / `cmd clipboard`，个别 ROM 可能不可用（工具会返回带原因的 `isError`）。
@@ -354,7 +370,7 @@ ksu-mcp/
 - Streamable HTTP 会话由设备端维护：`Mcp-Session-Id` 经隧道原样中继，同一会话的多次调用由设备端维持状态。
 - **未在真机上验证的部分**（本次开发环境无 Android 设备，已如实标注）：KernelSU Manager 内嵌 WebView 的实际滚动帧率与 `file://`→`http://127.0.0.1` 跨源 `fetch` 可用性（不可用时自动回落 `ksu.exec`，功能不受影响，仅性能略降）；arm64/arm 二进制在真机上的 SELinux 通过性；真实 WiFi↔4G 切换与飞行模式恢复的时延；`screencap`/`input`/`svc` 在各厂商 ROM 上的可用性差异。
 
-## 十四、故障排查
+## 十五、故障排查
 
 | 现象 | 排查方向 |
 |---|---|
@@ -365,4 +381,4 @@ ksu-mcp/
 | 公网频繁断连 | 看服务端管理台的**心跳延迟/重连次数**；设备端 `mcpd logs --source tunnel`；检查是否有其他设备顶替同名连接 |
 | 服务莫名停止 | `mcpd logs --source watchdog` 看是否有卡死强杀记录；确认 `disabled` 标记未被误建 |
 | WebUI 按钮点了没反应 | 确认从 KernelSU Manager 打开（普通浏览器会显示降级横幅并禁用写操作） |
-| WebUI 卡顿 | 确认已用 v1.2.0 的 index.html；日志自动刷新默认关闭，仅在需要时打开 |
+| WebUI 卡顿 | 确认已用 v1.2.x 的 index.html；日志自动刷新默认关闭，仅在需要时打开 |

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -667,8 +668,8 @@ func TestSchemaHelpers(t *testing.T) {
 // ---------- 版本/常量一致性 ----------
 
 func TestAppVersion(t *testing.T) {
-	if appVersion != "1.2.0" {
-		t.Errorf("版本号应为 1.2.0，当前 %s", appVersion)
+	if appVersion != "1.2.1" {
+		t.Errorf("版本号应为 1.2.1，当前 %s", appVersion)
 	}
 	if serverName != "ksu-mcpd" {
 		t.Errorf("服务名被意外修改: %s", serverName)
@@ -695,4 +696,59 @@ func TestDeprecatedDesc(t *testing.T) {
 	if d2 := deprecatedDesc("", "原始"); !strings.Contains(d2, "弃用") {
 		t.Error("无替代工具时也应标注弃用")
 	}
+}
+
+// TestTunnelStateConcurrentPersist 并发落盘不得丢更新。
+//
+// 回归 v1.2.0 的缺陷：快照在锁内取、文件在锁外写，多个
+// handleTunnelRequest goroutine 并发落盘时旧快照会覆盖新快照。
+// 运行态文件既是 WebUI 的真实状态来源，也是 watchdog 的存活判据，
+// 回退到旧值会造成状态回退甚至误判卡死。
+func TestTunnelStateConcurrentPersist(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MCPD_DATA", dir)
+	st := newTunnelState("wss://x/tunnel", "dev", "")
+	st.update(func(m *tunnelMetrics) { m.State = "connected"; m.Connected = true; m.LastFrameAt = time.Now().Unix() })
+
+	const N = 150
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// 强制落盘：制造并发写压力
+			st.updateForce(func(m *tunnelMetrics) {
+				m.Requests++
+				m.BytesIn += 1024
+				m.BytesOut += 512
+			})
+		}()
+	}
+	wg.Wait()
+	st.updateForce(func(m *tunnelMetrics) {})
+
+	got, err := loadTunnelMetrics()
+	if err != nil {
+		t.Fatalf("运行态应可读取: %v", err)
+	}
+	if got.Requests != N {
+		t.Fatalf("并发落盘丢更新：期望 Requests=%d 实际 %d", N, got.Requests)
+	}
+	if got.BytesIn != N*1024 || got.BytesOut != N*512 {
+		t.Fatalf("并发落盘字节统计不一致：in=%d out=%d", got.BytesIn, got.BytesOut)
+	}
+	// 文件内容必须是合法 JSON（共用 .tmp 路径曾被并发踩踏）
+	var probe tunnelMetrics
+	if err := json.Unmarshal(mustRead(t, tunnelRuntimePath()), &probe); err != nil {
+		t.Fatalf("运行态文件不是合法 JSON: %v", err)
+	}
+}
+
+func mustRead(t *testing.T, p string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("读取 %s 失败: %v", p, err)
+	}
+	return b
 }

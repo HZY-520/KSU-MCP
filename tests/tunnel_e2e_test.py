@@ -20,6 +20,7 @@ KSU-MCP v1.2.0 隧道端到端测试
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -33,6 +34,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 TUNNEL_SRV = os.path.join(ROOT, "tunnel-server", "server.js")
 NODE_MODULES = os.path.join(ROOT, "tunnel-server", "node_modules")
+
+# 从 server.js 解析服务端版本常量，避免版本写死（每次发版都要改测试）
+with open(TUNNEL_SRV, encoding="utf-8") as _f:
+    _m = re.search(r"const VERSION = '([^']+)'", _f.read())
+SRV_VERSION = _m.group(1) if _m else "unknown"
 
 def _free_port():
     import socket
@@ -49,6 +55,7 @@ RUN_ID = os.getpid()
 SRV_PORT = int(os.environ.get("TEST_SRV_PORT") or _free_port())
 MCP_PORT = int(os.environ.get("TEST_MCP_PORT") or _free_port())
 DATA = os.environ.get("TEST_TUNNEL_DATA", f"/tmp/ksumcp-tunnel-e2e-{RUN_ID}")
+
 DEVICE = "e2e-phone"
 TUNNEL_TOKEN = "tunnel-token-0123456789abcdef"
 CLIENT_TOKEN = "client-token-0123456789abcdef"
@@ -218,7 +225,8 @@ def main():
         if not online:
             raise SystemExit(1)
         dev = [d for d in status["devices"] if d["device"] == DEVICE][0]
-        check("服务端版本为 1.2.0", status["version"] == "1.2.0", status.get("version"))
+        check(f"服务端上报版本与 server.js 常量一致（{SRV_VERSION}）",
+              status["version"] == SRV_VERSION, status.get("version"))
         check("服务端心跳参数与设备端对齐（10s / 3 次 / 30s 判死）",
               status["heartbeat"]["pingIntervalMs"] == 10000
               and status["heartbeat"]["maxMissedPongs"] == 3
@@ -280,6 +288,9 @@ def main():
         dm = [d for d in mets["devices"] if d["device"] == DEVICE][0]
         check("指标记录到分片出站流量（bytesIn > 400KB）",
               dm["bytesIn"] > 400 * 1024, str(dm["bytesIn"]))
+        check("指标记录到入站流量 bytesIn 与出站流量 bytesOut 均非零",
+              dm["bytesIn"] > 0 and dm["bytesOut"] > 0,
+              f"in={dm['bytesIn']} out={dm['bytesOut']}")
         check("指标记录转发请求数与零失败",
               dm["requests"] >= 4 and dm["failures"] == 0,
               f"req={dm['requests']} fail={dm['failures']}")
@@ -330,9 +341,15 @@ def main():
         check("设备端运行态落盘且标记 connected（WebUI 真实状态来源）", device_ok,
               json.dumps(tm) if os.path.exists(rt) else "no runtime file")
         check("设备端运行态记录服务端版本与流式能力",
-              tm.get("server_version") == "1.2.0" and tm.get("stream_ok") is True, str(tm))
+              tm.get("server_version") == SRV_VERSION and tm.get("stream_ok") is True, str(tm))
         check("设备端运行态记录心跳参数（10s/35s）",
               tm.get("connected") is True and tm.get("state") == "connected", tm.get("state"))
+        check("设备端运行态累计收发字节（bytes_out 不再恒为 0）",
+              tm.get("bytes_in", 0) > 0 and tm.get("bytes_out", 0) > 0,
+              f"in={tm.get('bytes_in')} out={tm.get('bytes_out')}")
+        check("设备端运行态累计转发请求与响应数",
+              tm.get("requests", 0) >= 4 and tm.get("responses", 0) >= 4,
+              f"req={tm.get('requests')} resp={tm.get('responses')}")
 
         # ---------------- 6. 断线自动恢复 ----------------
         section("6. 断线自动恢复（服务端重启）")

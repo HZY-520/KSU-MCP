@@ -253,12 +253,24 @@ WebUI 已按「**优先 `fetch` 本地 API，失败自动回退 `ksu.exec`**」�
 | A8 版本号多处硬编码 | 已修复：`appVersion` / `module.prop` / 文档 / 包名统一为 1.2.0 |
 | A9 `module/README.md` 与根 README 逐字节相同 | 已修复：改为模块运维专章（安装行为 / 进程模型 / 运维命令 / 排障 / 升级回滚） |
 
-### 6.3 单测额外发现并修复的缺陷
+### 6.3 测试与长跑额外发现并修复的缺陷（v1.2.1 补丁）
 
 - **`markRetry` 被写入节流吞掉**：运行态落盘有 1s 节流，而 `markRetry` 写入的 `NextRetryAt`
   常常落在节流窗口内被跳过，导致 watchdog 读到 `NextRetryAt=0`，可能把「正在合法退避等待」
   误判为卡死。修复：新增 `updateForce()`，`markRetry` 强制落盘。
   该缺陷由 `TestTunnelMetricsRoundTrip` 直接暴露（修复前断言失败）。
+- **运行态落盘竞态（丢更新）**：`tunnelState.apply()` 在锁内取快照却在**锁外**写文件，
+  每个远端请求各起一个 goroutine 调用 `update()`，并发落盘时**旧快照会覆盖新快照**；
+  且所有写入共用同一个 `.tmp` 路径可能互相踩踏。运行态文件既是 WebUI 隧道状态的唯一
+  真实来源，也是 watchdog 的存活判据，状态回退会导致误判。
+  修复：新增 `writeMu` 串行化落盘，并在持锁状态下重新获取最新快照后写入；
+  新增并发回归测试 `TestTunnelStateConcurrentPersist`（150 goroutine × 强制落盘）。
+  该缺陷由稳定性长跑采样「`reconnects` 与累计计数不增长/回退」暴露，
+  并由隧道 e2e 的新增断言稳定复现。
+- **`bytes_out` 恒为 0**：该字段被声明并在 `/api/state` 中读取，但**从未累加**
+  （`writeTunnelJSON` 直接 `conn.WriteJSON` 未统计字节），导致 WebUI「收发字节」恒显示 0 B。
+  修复：改为 `json.Marshal` + `WriteMessage` 并累计实际写入字节数。
+  该缺陷同样由长跑指标与隧道 e2e 新增断言暴露。
 
 ### 6.4 命名规范例外说明
 
@@ -272,12 +284,16 @@ WebUI 已按「**优先 `fetch` 本地 API，失败自动回退 `ksu.exec`**」�
 
 | 测试 | 用例数 | 结果 | 命令 |
 |---|---|---|---|
-| Go 单元测试 | 24 个测试函数 | 全部通过 | `cd src && go test ./...` |
+| Go 单元测试（含 `-race`） | 25 个测试函数 | 全部通过 | `cd src && go test -race ./...` |
 | MCP 协议端到端（含全部工具解析正确性） | 87 项断言 | 全部通过 | `python3 tests/e2e_test.py` |
-| 隧道端到端（真实 Node 服务端 + 真实 mcpd） | 38 项断言 | 全部通过 | `python3 tests/tunnel_e2e_test.py` |
+| 隧道端到端（真实 Node 服务端 + 真实 mcpd） | 41 项断言 | 全部通过 | `python3 tests/tunnel_e2e_test.py` |
 | WebUI jsdom 冒烟 + 性能约定回归 | 68 项断言 | 全部通过 | `node tests/webui_test.js` |
 | 稳定性长跑 | 2 小时 / 10s 采样 | 见 `tests/soak_test.py` 输出的 `soak.json` | `python3 tests/soak_test.py 7200 10` |
 
+> v1.2.1 补丁：上述两类运行态缺陷（落盘竞态、`bytes_out` 未累加）在 v1.2.0 发布后
+> 由稳定性长跑与隧道 e2e 断言发现，已在 v1.2.1 修复并补上回归断言
+> （隧道 e2e 38 → 41 项，Go 单测 24 → 25 个）。
+>
 > 说明：上述测试均在 Linux 服务器上以 `tests/fakebin/` 模拟 Android 系统命令完成，
 > 覆盖解析逻辑、协议行为、链路稳定性与界面交互完整性；
 > **真机相关项（WebView 实际帧率、ARM 二进制在设备上的 SELinux 通过性、真实网络切换时延）

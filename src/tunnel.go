@@ -107,6 +107,12 @@ type tunnelState struct {
 	pid         int
 	lastPersist time.Time
 	lastState   string
+	// writeMu 串行化落盘。v1.2.1 修复：v1.2.0 在锁外写文件，多个
+	// handleTunnelRequest goroutine 并发落盘时会出现「旧快照覆盖新快照」
+	// （丢更新），且共用同一个 .tmp 路径可能互相踩踏。
+	// 运行态文件是 WebUI 的真实状态来源、也是 watchdog 的存活判据，
+	// 回归到旧值会造成状态回退甚至误判卡死，必须串行化。
+	writeMu sync.Mutex
 }
 
 func newTunnelState(server, device, ip string) *tunnelState {
@@ -149,15 +155,25 @@ func (t *tunnelState) apply(fn func(m *tunnelMetrics), force bool) {
 	}
 	t.lastState = t.m.State
 	t.lastPersist = now
-	snap := t.m
 	t.mu.Unlock()
-	t.persist(snap)
+	t.persistLatest()
 }
 
-func (t *tunnelState) persist(snap tunnelMetrics) {
-	if b, err := json.MarshalIndent(snap, "", "  "); err == nil {
-		_ = writeFileAtomic(tunnelRuntimePath(), b, 0644)
+// persistLatest 串行化落盘，并始终写入「当前最新」快照。
+//
+// 关键点：快照在 writeMu 之内重新获取，因此无论多少个 goroutine 并发调用，
+// 最后写入文件的一定是最新数据，不会出现旧值覆盖新值的丢更新。
+func (t *tunnelState) persistLatest() {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+	t.mu.Lock()
+	snap := t.m
+	t.mu.Unlock()
+	b, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		return
 	}
+	_ = writeFileAtomic(tunnelRuntimePath(), b, 0644)
 }
 
 func (t *tunnelState) snapshot() tunnelMetrics {
@@ -684,7 +700,7 @@ func handleTunnelRequest(conn *websocket.Conn, cfg *Config, msg *tunnelRequestMs
 	fail := func(status int, errmsg string) {
 		body := map[string]any{"jsonrpc": "2.0", "error": map[string]any{"code": -32000, "message": errmsg}}
 		raw, _ := json.Marshal(body)
-		writeTunnelJSON(conn, wm, tunnelResponseMsg{
+		writeTunnelJSON(conn, wm, st, tunnelResponseMsg{
 			Type: "response", ID: msg.ID, Status: status,
 			Headers: map[string]string{"Content-Type": "application/json"},
 			Body:    base64.StdEncoding.EncodeToString(raw), Fin: true,
@@ -746,16 +762,16 @@ func handleTunnelRequest(conn *websocket.Conn, cfg *Config, msg *tunnelRequestMs
 
 	if msg.Method == http.MethodGet && streamOK {
 		// 流式转发：HTTP 流（SSE / 事件帧）边读边推，远端客户端实时收到数据
-		writeTunnelJSON(conn, wm, tunnelResponseMsg{Type: "response", ID: msg.ID, Status: httpResp.StatusCode, Headers: headers, Body: "", Fin: false})
+		writeTunnelJSON(conn, wm, st, tunnelResponseMsg{Type: "response", ID: msg.ID, Status: httpResp.StatusCode, Headers: headers, Body: "", Fin: false})
 		st.update(func(m *tunnelMetrics) { m.Streams++ })
 		buf := make([]byte, tunnelChunkSize)
 		for {
 			n, rerr := httpResp.Body.Read(buf)
 			if n > 0 {
-				writeTunnelJSON(conn, wm, tunnelChunkMsg{Type: "chunk", ID: msg.ID, Body: base64.StdEncoding.EncodeToString(buf[:n])})
+				writeTunnelJSON(conn, wm, st, tunnelChunkMsg{Type: "chunk", ID: msg.ID, Body: base64.StdEncoding.EncodeToString(buf[:n])})
 			}
 			if rerr != nil {
-				writeTunnelJSON(conn, wm, tunnelChunkMsg{Type: "chunk", ID: msg.ID, Done: true})
+				writeTunnelJSON(conn, wm, st, tunnelChunkMsg{Type: "chunk", ID: msg.ID, Done: true})
 				st.update(func(m *tunnelMetrics) { m.Responses++ })
 				return
 			}
@@ -770,7 +786,7 @@ func handleTunnelRequest(conn *websocket.Conn, cfg *Config, msg *tunnelRequestMs
 	}
 	// 小响应/旧版服务端：单帧回传
 	if !streamOK || len(data) <= streamSingleShotMax {
-		writeTunnelJSON(conn, wm, tunnelResponseMsg{
+		writeTunnelJSON(conn, wm, st, tunnelResponseMsg{
 			Type: "response", ID: msg.ID, Status: httpResp.StatusCode,
 			Headers: headers, Body: base64.StdEncoding.EncodeToString(data), Fin: true,
 		})
@@ -778,24 +794,37 @@ func handleTunnelRequest(conn *websocket.Conn, cfg *Config, msg *tunnelRequestMs
 		return
 	}
 	// 大响应：头帧 + 分片 + 结束帧
-	writeTunnelJSON(conn, wm, tunnelResponseMsg{Type: "response", ID: msg.ID, Status: httpResp.StatusCode, Headers: headers, Body: "", Fin: false})
+	writeTunnelJSON(conn, wm, st, tunnelResponseMsg{Type: "response", ID: msg.ID, Status: httpResp.StatusCode, Headers: headers, Body: "", Fin: false})
 	for off := 0; off < len(data); off += tunnelChunkSize {
 		end := off + tunnelChunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		writeTunnelJSON(conn, wm, tunnelChunkMsg{Type: "chunk", ID: msg.ID, Body: base64.StdEncoding.EncodeToString(data[off:end])})
+		writeTunnelJSON(conn, wm, st, tunnelChunkMsg{Type: "chunk", ID: msg.ID, Body: base64.StdEncoding.EncodeToString(data[off:end])})
 	}
-	writeTunnelJSON(conn, wm, tunnelChunkMsg{Type: "chunk", ID: msg.ID, Done: true})
+	writeTunnelJSON(conn, wm, st, tunnelChunkMsg{Type: "chunk", ID: msg.ID, Done: true})
 	st.update(func(m *tunnelMetrics) { m.Responses++ })
 }
 
-// writeTunnelJSON 串行化写入 WS 并累计出站字节数
-func writeTunnelJSON(conn *websocket.Conn, wm *sync.Mutex, v any) {
+// writeTunnelJSON 串行化写入 WS 并累计出站字节数。
+//
+// v1.2.1 修复：v1.2.0 的 BytesOut 只被声明与读取、从未累加，
+// 导致 WebUI「收发字节」恒显示 0 B（由稳定性长跑指标发现）。
+// 这里改用 Marshal + WriteMessage，既避免 WriteJSON 的二次序列化，
+// 又能精确统计实际写入的字节数。
+func writeTunnelJSON(conn *websocket.Conn, wm *sync.Mutex, st *tunnelState, v any) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
 	wm.Lock()
-	defer wm.Unlock()
 	_ = conn.SetWriteDeadline(time.Now().Add(20 * time.Second))
-	_ = conn.WriteJSON(v)
+	err = conn.WriteMessage(websocket.TextMessage, raw)
+	wm.Unlock()
+	if err == nil && st != nil {
+		n := int64(len(raw))
+		st.update(func(m *tunnelMetrics) { m.BytesOut += n })
+	}
 }
 
 // ---------- 隧道状态命令 ----------

@@ -482,8 +482,10 @@ def main():
 
         st, hdr, body = http("GET", "/api/state", headers=auth_hdr())
         stobj = json.loads(body)
-        check("/api/state 鉴权通过并返回版本/端口",
-              st == 200 and stobj["version"] == "1.2.0" and stobj["port"] == PORT, str(st))
+        # 版本断言不写死具体号，避免每次发版都要改测试；只校验形态与端口
+        check("/api/state 鉴权通过并返回语义化版本与端口",
+              st == 200 and re.fullmatch(r"\d+\.\d+\.\d+", str(stobj.get("version", ""))) is not None
+              and stobj["port"] == PORT, f"{st} {stobj.get('version')}")
         check("/api/state 返回 token 供 WebUI 回填（修复 #tunToken 空缺）",
               stobj.get("token") == TOKEN)
         eps = stobj.get("endpoints", {})
