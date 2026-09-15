@@ -288,7 +288,12 @@ WebUI 已按「**优先 `fetch` 本地 API，失败自动回退 `ksu.exec`**」�
 | MCP 协议端到端（含全部工具解析正确性 + CLI 契约） | 106 项断言 | 全部通过 | `python3 tests/e2e_test.py` |
 | 隧道端到端（含持续断网恢复 + watchdog 卡死检测） | 47 项断言 | 全部通过 | `python3 tests/tunnel_e2e_test.py` |
 | WebUI jsdom 冒烟 + 性能约定回归 | 73 项断言 | 全部通过 | `node tests/webui_test.js` |
-| 稳定性长跑 | 2 小时 / 10s 采样 | 见 `tests/soak_test.py` 输出的 `soak.json` | `python3 tests/soak_test.py 7200 10` |
+| 稳定性长跑（**部分执行**） | 637s / 10s 采样 | 0 断连、0 调用失败、0 丢包 | `python3 tests/soak_test.py 7200 10` |
+
+> **关于稳定性长跑的如实说明**：实测连续运行 **10 分 37 秒（637s）**、10s 采样：**0 次断连、0 次 MCP 调用失败**、心跳 63 拍 **0 丢包**、RTT 1–4ms、收发 3193/3940 字节。完整的 2 小时运行按用户要求跳过（非失败），可随时执行：`python3 tests/soak_test.py 7200 10`，结果写入 `/tmp/ksumcp-soak-*/soak.json`。
+> 因此「连续运行 2 小时无异常断连」这一条**尚属未完全验证**；
+> 已观测到的 637 秒区间内无任何断连或调用失败，且另有隧道 e2e 的
+> 「持续断网 75s 后自动恢复（15.6s）」与 watchdog 卡死检测用例提供机制层证据。
 
 > v1.2.1 补丁：上述两类运行态缺陷（落盘竞态、`bytes_out` 未累加）在 v1.2.0 发布后
 > 由稳定性长跑与隧道 e2e 断言发现，已在 v1.2.1 修复并补上回归断言

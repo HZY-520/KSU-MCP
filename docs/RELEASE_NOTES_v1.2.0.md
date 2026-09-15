@@ -152,6 +152,6 @@ macOS/Linux 用户升级命令（设备端）：直接在 KernelSU Manager 中�
 | MCP 协议端到端（`python3 tests/e2e_test.py`） | 87 项断言 | 全部通过 |
 | 隧道端到端（`python3 tests/tunnel_e2e_test.py`） | 38 项断言 | 全部通过 |
 | WebUI jsdom 冒烟 + 性能约定回归（`node tests/webui_test.js`） | 68 项断言 | 全部通过 |
-| 稳定性长跑（`python3 tests/soak_test.py 7200 10`） | 2 小时 / 10s 采样 | 见仓库 `tests/soak_test.py` 输出的 `soak.json` |
+| 稳定性长跑（`python3 tests/soak_test.py 7200 10`） | 2 小时 / 10s 采样 | **未在 v1.2.0 执行**；v1.2.1 阶段执行了 637 秒（0 断连 / 0 调用失败），完整 2 小时待后续执行 |
 
 分析与诊断全文见仓库 `docs/analysis-and-diagnosis.md`（含 v1.1.0 六大问题的逐条根因定位到文件:行号）。

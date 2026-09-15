@@ -335,7 +335,7 @@ python3 tests/tunnel_e2e_test.py
 # 4) WebUI 冒烟（jsdom）：交互完整性 / 无摆设组件 / 性能约定回归防护
 npm install jsdom && NODE_PATH=$PWD/node_modules node tests/webui_test.js
 
-# 5) 稳定性长跑（默认 2 小时）
+# 5) 稳定性长跑（默认 2 小时；持续运行链路并每 60s 发起一次真实 MCP 调用）
 python3 tests/soak_test.py 7200 10
 ```
 
