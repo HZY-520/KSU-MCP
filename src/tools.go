@@ -226,7 +226,7 @@ func argStringSlice(args map[string]any, key string) []string {
 // ---------- 注册表 ----------
 
 func toolRegistry() []toolEntry {
-	return []toolEntry{
+	entries := []toolEntry{
 		// ================= 设备信息类（只读） =================
 		{
 			def: ToolDef{
@@ -835,6 +835,10 @@ func toolRegistry() []toolEntry {
 				return toolClipboardGet()
 			},
 		},
+	}
+	// v1.2.0 新增的屏幕控件树工具（结构化替代截图），插在弃用别名之前
+	entries = append(entries, uiToolEntries()...)
+	entries = append(entries, []toolEntry{
 
 		// ================= v1.1.0 遗留别名（deprecated） =================
 		deprecated("device_info", "android_get_device_info", "获取设备信息：品牌、型号、Android 版本、SDK、内核、SELinux、root 状态等",
@@ -897,7 +901,8 @@ func toolRegistry() []toolEntry {
 				"key": strProp("属性名，如 ro.product.model；省略则返回全部"),
 			}, nil),
 			func(cfg *Config, args map[string]any) ([]map[string]any, bool) { return toolGetprop(args) }),
-	}
+	}...)
+	return entries
 }
 
 // deprecated 构造一个弃用别名条目（自动加弃用前缀说明）

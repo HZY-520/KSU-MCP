@@ -6,6 +6,13 @@
 //	Streamable HTTP（HTTP，POST/GET/DELETE /mcp，Bearer Token 鉴权）
 //	SSE（HTTP，/sse，供老客户端兼容）
 //
+// v1.3.0 新增：
+//   - 8 个屏幕控件树工具（uiauto.go）：用结构化数据替代截图做界面识别
+//     android_get_screen_elements / _dump_ui_hierarchy / _find_element / _tap_element /
+//     _set_element_text / _wait_for_element / _scroll_to_element / _get_foreground_app
+//   - 原有截图工具（android_screenshot / screenshot）保持不变，两者互补
+//   - 配套 AI 技能包（仓库 skills/，单独打包进 Release）
+//
 // v1.2.1 修复（相对 v1.2.0）：
 //   - 隧道运行态落盘竞态：快照在锁内取、文件在锁外写，多 goroutine 并发落盘时
 //     旧快照会覆盖新快照（丢更新），且共用同一 .tmp 路径可能互相踩踏。
@@ -40,7 +47,7 @@ import (
 )
 
 const (
-	appVersion      = "1.2.1"
+	appVersion      = "1.3.0"
 	serverName      = "ksu-mcpd"
 	protocolVersion = "2025-11-25"
 

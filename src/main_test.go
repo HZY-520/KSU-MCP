@@ -21,8 +21,10 @@ import (
 // toolNameRe MCP 2025-11-25 允许的字符集与长度：1-128，A-Z a-z 0-9 _ - .
 var toolNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
-// canonicalRe {service}_{action}_{resource} 三段式
-var canonicalRe = regexp.MustCompile(`^android_(get|list|exec|input|toggle|set|read|write)_[a-z0-9_]+$`)
+// canonicalRe 校验 {service}_{action}_{resource} 三段式。
+// action 是本项目自定的动词（get/list/exec/input/toggle/set/read/write/dump/find/tap/wait/scroll…），
+// 因此不写死动词表，只强制「android_ + action + resource 至少三段、全小写」。
+var canonicalRe = regexp.MustCompile(`^android_[a-z][a-z0-9]*_[a-z0-9_]+$`)
 
 // nameExceptions 任务书逐字指定的例外名（仅两段）
 var nameExceptions = map[string]bool{"android_screenshot": true}
@@ -99,6 +101,10 @@ func TestToolRegistryIntegrity(t *testing.T) {
 		"android_get_device_info", "android_get_battery_status", "android_get_storage_info",
 		"android_get_network_info", "android_list_packages", "android_get_running_processes",
 		"android_get_logcat", "android_screenshot", "android_input_text", "android_toggle_setting",
+		// v1.3.0 新增：屏幕控件树（结构化替代截图）
+		"android_get_screen_elements", "android_dump_ui_hierarchy", "android_find_element",
+		"android_tap_element", "android_set_element_text", "android_wait_for_element",
+		"android_scroll_to_element", "android_get_foreground_app",
 	} {
 		if !canonical[want] {
 			t.Errorf("缺少任务书要求的工具: %s", want)
@@ -668,8 +674,8 @@ func TestSchemaHelpers(t *testing.T) {
 // ---------- 版本/常量一致性 ----------
 
 func TestAppVersion(t *testing.T) {
-	if appVersion != "1.2.1" {
-		t.Errorf("版本号应为 1.2.1，当前 %s", appVersion)
+	if appVersion != "1.3.0" {
+		t.Errorf("版本号应为 1.3.0，当前 %s", appVersion)
 	}
 	if serverName != "ksu-mcpd" {
 		t.Errorf("服务名被意外修改: %s", serverName)
