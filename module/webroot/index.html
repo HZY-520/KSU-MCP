@@ -42,8 +42,11 @@ body{min-height:100vh;color:var(--txt);
 .hidden{display:none!important}
 
 /* ---------- 顶栏 ---------- */
+/* 吸顶栏单独提升为合成层：滚动时只做层移动，不重绘整条栏
+   （模块无法修改 KernelSU Manager 的 WebView 开关，因此从 CSS 侧保证性能） */
 .topbar{position:sticky;top:0;z-index:50;background:rgba(10,12,20,.9);
-  border-bottom:1px solid var(--line);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+  border-bottom:1px solid var(--line);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  transform:translateZ(0);will-change:transform}
 .topbar-in{display:flex;align-items:center;gap:10px;padding:10px 0;min-height:56px}
 .logo{width:34px;height:34px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;
   background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-weight:800;font-size:15px}
@@ -239,6 +242,16 @@ footer{color:var(--dim2);font-size:11px;text-align:center;margin-top:20px;line-h
         <div class="box"><b id="mTools">-</b><span>MCP 工具</span></div>
         <div class="box"><b id="mSess">-</b><span>HTTP 会话</span></div>
       </div>
+      <div class="token-row">
+        <div class="token-box">
+          <code id="tokenVal">-</code>
+          <button class="btn mini ghost" id="eyeBtn" onclick="toggleToken()">显示</button>
+        </div>
+        <button class="btn mini" onclick="copyToken()">复制</button>
+        <button class="btn mini" onclick="regenToken(this)">重新生成</button>
+      </div>
+      <p class="hint" id="tokenHint">MCP 鉴权 Token（本机 / 局域网使用）；公网接入用服务端下发的
+        <code>clientToken</code>，见「连接信息 → 公网」。</p>
       <div class="btn-row">
         <button class="btn primary grow" data-label="启动" onclick="act('start',this)">启动</button>
         <button class="btn grow" data-label="重启" onclick="act('restart',this)">重启</button>
@@ -262,18 +275,8 @@ footer{color:var(--dim2);font-size:11px;text-align:center;margin-top:20px;line-h
       <div id="tab-local" style="margin-top:10px"></div>
       <div id="tab-lan" class="hidden" style="margin-top:10px"></div>
       <div id="tab-wan" class="hidden" style="margin-top:10px"></div>
+      <p class="hint">每条地址均标注传输类型与鉴权方式；本机 / 局域网 Token 见上方「运行状态」面板。</p>
 
-      <div class="token-row">
-        <div class="token-box">
-          <code id="tokenVal">-</code>
-          <button class="btn mini ghost" id="eyeBtn" onclick="toggleToken()">显示</button>
-        </div>
-        <button class="btn mini" onclick="copyToken()">复制</button>
-        <button class="btn mini" onclick="regenToken(this)">重新生成</button>
-      </div>
-      <p class="hint" id="tokenHint">MCP 客户端接入：类型选 <code>Streamable HTTP</code>，
-        URL 见上方对应网络层级，鉴权填 <code>Bearer &lt;Token&gt;</code>（本机 / 局域网用上方 Token，
-        公网用服务端下发的 <code>clientToken</code>）。</p>
     </div>
   </section>
 
@@ -287,6 +290,7 @@ footer{color:var(--dim2);font-size:11px;text-align:center;margin-top:20px;line-h
       </div>
       <div class="metrics">
         <div class="box"><b id="tmLatency">-</b><span>心跳延迟</span></div>
+        <div class="box"><b id="tmLoss">-</b><span>心跳丢包</span></div>
         <div class="box"><b id="tmReconn">-</b><span>重连次数</span></div>
         <div class="box"><b id="tmFails">-</b><span>连续失败</span></div>
         <div class="box"><b id="tmUptime">-</b><span>本次连接时长</span></div>
@@ -892,6 +896,8 @@ function renderTunnel(tun) {
   }
   setText('tunVer', tun.server_version ? '服务端 v' + tun.server_version + (tun.stream_ok ? ' · 流式' : ' · 单帧') : '服务端 -');
   setText('tmLatency', tun.latency_ms != null ? tun.latency_ms + ' ms' : '-');
+  setText('tmLoss', (tun.ping_loss_percent != null ? tun.ping_loss_percent + '%' : '-')
+    + (tun.ping_sent ? ' (' + (tun.ping_lost || 0) + '/' + tun.ping_sent + ')' : ''));
   setText('tmReconn', tun.reconnects != null ? tun.reconnects : '-');
   setText('tmFails', tun.consecutive_fails != null ? tun.consecutive_fails : '-');
   setText('tmUptime', fmtDur(tun.connected_seconds));
@@ -1088,11 +1094,39 @@ function trimLog(text) {
   if (lines.length <= MAX_LOG_LINES) return text;
   return lines.slice(lines.length - MAX_LOG_LINES).join('\n');
 }
-/* 写入 <pre>：仅在内容变化时赋值，且保持「原本贴底才自动贴底」 */
-function writePre(el, text) {
-  text = trimLog(text);
+/* 写入 <pre>：增量渲染 + 变更比对，避免每次整段重写造成排版开销。
+   1) 新内容以旧内容为前缀（日志追加的常见情形）→ 只 appendData 增量部分（O(增量)）；
+   2) 行数超上限或日志被轮转/截断 → 回退为整段重写；
+   3) 始终保持「原本贴底才自动贴底」，不打断用户向上翻阅。 */
+var LOG_STATE = {};   // source -> 上一次写入的全文
+function writePre(el, text, source) {
+  var prev = LOG_STATE[source] || '';
   var atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-  if (el.textContent !== text) el.textContent = text;
+  var full = trimLog(text);
+
+  if (el.firstChild && el.firstChild.nodeType === 3 && prev && text.indexOf(prev) === 0) {
+    var delta = text.slice(prev.length);
+    if (delta) {
+      // 追加后若超过上限，回退整段重写（保证渲染量有界）
+      if ((prev + delta).split('\n').length > MAX_LOG_LINES) {
+        el.textContent = full;
+        LOG_STATE[source] = full;
+      } else {
+        el.firstChild.appendData(delta);
+        LOG_STATE[source] = text;
+        // 保持上限：仅当明显超限时才裁剪
+        if (el.textContent.split('\n').length > MAX_LOG_LINES * 2) {
+          el.textContent = full;
+          LOG_STATE[source] = full;
+        }
+      }
+    }
+  } else if (el.textContent !== full) {
+    el.textContent = full;
+    LOG_STATE[source] = text;
+  } else {
+    LOG_STATE[source] = text;
+  }
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 function loadLogs(force, src) {
@@ -1114,7 +1148,7 @@ function loadLogs(force, src) {
     })
     .catch(function () { return useKsu(); });
   return p.then(function (text) {
-    writePre(target, text);
+    writePre(target, text, source);
     setText('logChip', source + ' · ' + trimLog(text).split('\n').length + ' 行');
   }).catch(function (e) {
     target.textContent = '读取日志失败：' + String(e.message || e);

@@ -113,6 +113,9 @@ func buildUIState(cfg *Config) map[string]any {
 		tunnel["reconnects"] = m.Reconnects
 		tunnel["consecutive_fails"] = m.ConsecutiveFails
 		tunnel["latency_ms"] = m.LatencyMs
+		tunnel["ping_sent"] = m.PingSent
+		tunnel["ping_lost"] = m.PingLost
+		tunnel["ping_loss_percent"] = m.PingLossPercent
 		tunnel["bytes_in"] = m.BytesIn
 		tunnel["bytes_out"] = m.BytesOut
 		tunnel["requests"] = m.Requests

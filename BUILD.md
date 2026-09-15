@@ -10,7 +10,15 @@
   `TestTunnelStateConcurrentPersist`。
 - **修复 `bytes_out` 恒为 0**：该字段从未累加，WebUI「收发字节」恒显示 0 B；
   `writeTunnelJSON()` 改为 `Marshal + WriteMessage` 并统计真实写入字节。
-- 测试增强：隧道 e2e 38 → 41 项断言，Go 单测 24 → 25 个测试函数（`go test -race` 通过）。
+- 收尾完善：补齐**心跳丢包指标**（`ping_sent`/`ping_lost`/`ping_loss_percent`，
+  服务端 `pingsSent`/`pingsMissed`/`lossPercent`）；Token 归位到「运行状态」面板；
+  日志改增量 `appendData` 渲染；吸顶栏独立合成层。
+- 测试增强：Go 单测 24 → **25** 个测试函数（`go test -race` 通过）；
+  MCP e2e 87 → **106** 项断言（新增 CLI 契约测试）；
+  隧道 e2e 38 → **47** 项断言（新增丢包断言与**持续断网 75s 恢复**测试）；
+  WebUI jsdom 68 → **73** 项断言（新增丢包、Token 面板归位、增量渲染不变量）。
+- 三处有意识的实现差异（未用 ConnectivityManager、日志未做虚拟滚动、
+  WebView 开关与静态资源缓存不在模块可控范围）见 README 第十六节。
 
 > v1.2.0 的 tag 与 Release 保留不动以便追溯。
 

@@ -477,6 +477,8 @@ function devCard(d, i) {
     return box;
   };
   mrow.appendChild(mcell(d.online ? fmtMs(m.rttMs) : '-', '心跳延迟'));
+  mrow.appendChild(mcell((m.lossPercent || 0) + '%', '心跳丢包'
+    + (m.pingsSent ? ' (' + (m.pingsMissed || 0) + '/' + m.pingsSent + ')' : '')));
   mrow.appendChild(mcell(String(m.reconnects || 0), '重连次数'));
   mrow.appendChild(mcell((m.requests || 0) + '/' + (m.failures || 0), '请求/失败'));
   mrow.appendChild(mcell(fmtBytes((m.bytesIn || 0) + (m.bytesOut || 0)), '收发流量'));

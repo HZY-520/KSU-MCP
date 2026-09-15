@@ -286,14 +286,18 @@ WebUI 已按「**优先 `fetch` 本地 API，失败自动回退 `ksu.exec`**」�
 |---|---|---|---|
 | Go 单元测试（含 `-race`） | 25 个测试函数 | 全部通过 | `cd src && go test -race ./...` |
 | MCP 协议端到端（含全部工具解析正确性 + CLI 契约） | 106 项断言 | 全部通过 | `python3 tests/e2e_test.py` |
-| 隧道端到端（真实 Node 服务端 + 真实 mcpd） | 41 项断言 | 全部通过 | `python3 tests/tunnel_e2e_test.py` |
-| WebUI jsdom 冒烟 + 性能约定回归 | 68 项断言 | 全部通过 | `node tests/webui_test.js` |
+| 隧道端到端（含持续断网恢复 + watchdog 卡死检测） | 47 项断言 | 全部通过 | `python3 tests/tunnel_e2e_test.py` |
+| WebUI jsdom 冒烟 + 性能约定回归 | 73 项断言 | 全部通过 | `node tests/webui_test.js` |
 | 稳定性长跑 | 2 小时 / 10s 采样 | 见 `tests/soak_test.py` 输出的 `soak.json` | `python3 tests/soak_test.py 7200 10` |
 
 > v1.2.1 补丁：上述两类运行态缺陷（落盘竞态、`bytes_out` 未累加）在 v1.2.0 发布后
 > 由稳定性长跑与隧道 e2e 断言发现，已在 v1.2.1 修复并补上回归断言
-> （隧道 e2e 38 → 41 项，Go 单测 24 → 25 个）。
+> （隧道 e2e 38 → 47 项，WebUI 68 → 73 项，Go 单测 24 → 25 个）。
 >
+> **三处有意识的实现差异**（未使用 ConnectivityManager 而采用内核网卡/路由指纹 5s 轮询、
+> 日志未做虚拟滚动而采用有界+增量渲染、WebView 开关与静态资源缓存不在模块可控范围）
+> 已在 README「十六、实现取舍说明」中逐条给出原因与替代方案。
+
 > 说明：上述测试均在 Linux 服务器上以 `tests/fakebin/` 模拟 Android 系统命令完成，
 > 覆盖解析逻辑、协议行为、链路稳定性与界面交互完整性；
 > **真机相关项（WebView 实际帧率、ARM 二进制在设备上的 SELinux 通过性、真实网络切换时延）

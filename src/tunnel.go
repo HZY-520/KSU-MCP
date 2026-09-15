@@ -86,6 +86,9 @@ type tunnelMetrics struct {
 	Reconnects       int64  `json:"reconnects"`
 	ConsecutiveFails int64  `json:"consecutive_fails"`
 	LatencyMs        int64  `json:"latency_ms"`
+	PingSent         int64  `json:"ping_sent"`         // 已发送的心跳 ping 数
+	PingLost         int64  `json:"ping_lost"`         // 下一次心跳前仍未收到 pong 的次数
+	PingLossPercent  int64  `json:"ping_loss_percent"` // 心跳丢包率（0-100）
 	BytesIn          int64  `json:"bytes_in"`
 	BytesOut         int64  `json:"bytes_out"`
 	Requests         int64  `json:"requests"`
@@ -613,6 +616,21 @@ func serveTunnel(conn *websocket.Conn, cfg *Config, wm *sync.Mutex, st *tunnelSt
 		st.update(func(m *tunnelMetrics) { m.LastFrameAt = now.Unix() })
 		return conn.SetReadDeadline(time.Now().Add(tunnelReadTimeout))
 	})
+	// 心跳丢包统计：上一拍 ping 未在下一次发 ping 前收到 pong 即计一次丢包。
+	// （10s 间隔 / 35s 判死，容忍丢 2 拍不断连，因此丢包率是链路质量的早期指标）
+	var pingMu sync.Mutex
+	pingAnswered := true
+	markAnswered := func() {
+		pingMu.Lock()
+		pingAnswered = true
+		pingMu.Unlock()
+	}
+	updatePong := conn.PongHandler()
+	conn.SetPongHandler(func(appData string) error {
+		markAnswered()
+		return updatePong(appData)
+	})
+
 	pingDone := make(chan struct{})
 	defer close(pingDone)
 	go func() {
@@ -623,10 +641,25 @@ func serveTunnel(conn *websocket.Conn, cfg *Config, wm *sync.Mutex, st *tunnelSt
 			case <-pingDone:
 				return
 			case <-t.C:
+				pingMu.Lock()
+				missed := !pingAnswered
+				pingAnswered = false
+				pingMu.Unlock()
+
 				payload := []byte(strconv.FormatInt(time.Now().UnixMilli(), 10))
 				// WriteControl 可与其它写并发调用（gorilla 保证），因此不走 wm，
 				// 避免数据帧写阻塞时把心跳一起拖死
-				if err := conn.WriteControl(websocket.PingMessage, payload, time.Now().Add(5*time.Second)); err != nil {
+				err := conn.WriteControl(websocket.PingMessage, payload, time.Now().Add(5*time.Second))
+				st.update(func(m *tunnelMetrics) {
+					m.PingSent++
+					if missed {
+						m.PingLost++
+					}
+					if m.PingSent > 0 {
+						m.PingLossPercent = m.PingLost * 100 / m.PingSent
+					}
+				})
+				if err != nil {
 					return
 				}
 				// 心跳同时刷新运行态文件，作为 watchdog 的「进程活着且在工作」证据

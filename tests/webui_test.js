@@ -68,6 +68,7 @@ const STATE = {
     heartbeat_sec: 10, read_timeout_sec: 35, backoff_max_sec: 30, iface_poll_sec: 5,
     public_url: 'https://n.huziyang.top/mcp/my-phone', server_version: '1.2.0', stream_ok: true,
     reconnects: 3, consecutive_fails: 0, latency_ms: 42, bytes_in: 2048, bytes_out: 4096,
+    ping_sent: 120, ping_lost: 3, ping_loss_percent: 2,
     requests: 12, responses: 12, streams: 1, last_error: '', connected_seconds: 3661
   },
   endpoints: {
@@ -274,6 +275,15 @@ async function run() {
       /1 时 1 分/.test(d.getElementById('tmUptime').textContent), d.getElementById('tmUptime').textContent);
     check('隧道质量指标：收发字节',
       /收发/.test(d.getElementById('tmBytes').parentNode.textContent));
+    check('隧道质量指标：心跳丢包率与丢包计数',
+      d.getElementById('tmLoss').textContent === '2% (3/120)',
+      d.getElementById('tmLoss').textContent);
+    check('Token 位于「运行状态」面板（规范 3.2 要求运行状态含 Token）',
+      !!d.getElementById('cardStatus').querySelector('#tokenVal, #eyeBtn') ||
+      d.querySelector('#cardStatus #tokenVal') !== null,
+      '运行状态面板内未找到 Token 元素');
+    check('连接信息面板不再承载 Token 行',
+      d.getElementById('cardNet').querySelector('#tokenVal') === null);
 
     // D. Token 不回显 + 留空沿用
     check('隧道 Token 输入框保持为空（密钥不回显）', d.getElementById('tunToken').value === '');
@@ -361,7 +371,12 @@ async function run() {
 
     // 面板不可见时不渲染（降负载）
     const writePreSrc = w.writePre.toString();
-    check('writePre 仅在内容变化时赋值（避免无谓重排）', /el\.textContent !== text/.test(writePreSrc));
+    check('日志渲染走增量追加（appendData），而非每次整段重写',
+      /appendData/.test(writePreSrc) && /indexOf\(prev\) === 0/.test(writePreSrc), writePreSrc.slice(0, 90));
+    check('日志整段重写前先做内容比对（避免无谓重排）',
+      /el\.textContent !== full/.test(writePreSrc));
+    check('日志渲染量有界（超过 MAX_LOG_LINES 时回退整段重写）',
+      /MAX_LOG_LINES/.test(writePreSrc));
 
     check('页面无「点击无响应」的占位按钮：所有 .btn 都有 onclick 或为输入型控件',
       Array.from(d.querySelectorAll('button.btn')).every((b) =>

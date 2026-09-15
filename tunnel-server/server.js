@@ -115,6 +115,9 @@ function devMetrics(device) {
       reconnects: 0,         // 累计重连次数（第 2 次起计）
       rttMs: null,           // 最近一次心跳 RTT
       rttMsAvg: null,        // 滑动平均 RTT
+      pingsSent: 0,          // 已发送心跳 ping 数
+      pingsMissed: 0,        // 未在下一次心跳前收到 pong 的次数（丢包）
+      lossPercent: 0,        // 心跳丢包率（0-100）
       bytesIn: 0,            // 设备 -> 服务端（含分片回传）
       bytesOut: 0,           // 服务端 -> 设备（含转发请求）
       requests: 0,           // 转发到该设备的请求数
@@ -144,6 +147,9 @@ function metricsView(device) {
     reconnects: m.reconnects,
     rttMs: m.rttMs,
     rttMsAvg: m.rttMsAvg,
+    pingsSent: m.pingsSent,
+    pingsMissed: m.pingsMissed,
+    lossPercent: m.lossPercent,
     bytesIn: m.bytesIn,
     bytesOut: m.bytesOut,
     requests: m.requests,
@@ -239,9 +245,11 @@ wss.on('connection', (ws, req) => {
   deviceSockets.set(device, ws);
   ws.isAlive = true;
   ws.missedPongs = 0;
+  ws.pingAnswered = true;
   ws.on('pong', (data) => {
     ws.isAlive = true;
     ws.missedPongs = 0;
+    ws.pingAnswered = true;
     m.lastSeenAt = Date.now();
     // 心跳 RTT：服务端 ping 时把时间戳放进 payload，pong 原样带回
     const sent = parseInt(String(data), 10);
@@ -333,6 +341,11 @@ setInterval(() => {
       continue;
     }
     ws.missedPongs = (ws.missedPongs || 0) + 1;
+    // 丢包统计：上一拍 ping 未在本拍前收到 pong 即计一次丢包（链路质量早期指标）
+    if (ws.pingAnswered === false) m.pingsMissed += 1;
+    ws.pingAnswered = false;
+    m.pingsSent += 1;
+    if (m.pingsSent > 0) m.lossPercent = Math.round((m.pingsMissed * 100) / m.pingsSent);
     try { ws.ping(String(Date.now())); } catch (e) { /* ignore */ }
   }
 }, PING_INTERVAL).unref();
@@ -532,6 +545,8 @@ async function handleAPI(req, res, u) {
         failures: rows.reduce((a, r) => a + r.failures, 0),
         bytesIn: rows.reduce((a, r) => a + r.bytesIn, 0),
         bytesOut: rows.reduce((a, r) => a + r.bytesOut, 0),
+        pingsSent: rows.reduce((a, r) => a + r.pingsSent, 0),
+        pingsMissed: rows.reduce((a, r) => a + r.pingsMissed, 0),
         rttMsAvg: rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : null,
       },
       devices: rows,

@@ -326,6 +326,9 @@ def main():
         check("聚合指标：在线设备数与 RTT 均值",
               agg["online"] == 1 and agg["rttMsAvg"] is not None, str(agg))
         check("聚合指标：无失败请求", agg["failures"] == 0, str(agg))
+        check("服务端指标含心跳丢包统计（pingsSent/pingsMissed/lossPercent）",
+              dm.get("pingsSent", 0) > 0 and "pingsMissed" in dm and "lossPercent" in dm,
+              f"sent={dm.get('pingsSent')} missed={dm.get('pingsMissed')} loss={dm.get('lossPercent')}%")
 
         # 设备端运行态
         rt = os.path.join(DATA, "tunnel.runtime.json")
@@ -350,6 +353,10 @@ def main():
         check("设备端运行态累计转发请求与响应数",
               tm.get("requests", 0) >= 4 and tm.get("responses", 0) >= 4,
               f"req={tm.get('requests')} resp={tm.get('responses')}")
+        check("设备端运行态记录心跳丢包指标（ping_sent/ping_lost/ping_loss_percent）",
+              tm.get("ping_sent", 0) > 0 and isinstance(tm.get("ping_lost"), int)
+              and isinstance(tm.get("ping_loss_percent"), int),
+              f"sent={tm.get('ping_sent')} lost={tm.get('ping_lost')} pct={tm.get('ping_loss_percent')}")
 
         # ---------------- 6. 断线自动恢复 ----------------
         section("6. 断线自动恢复（服务端重启）")
@@ -368,13 +375,36 @@ def main():
         check("服务端被杀后设备端在 35s 判死窗口内感知断连", went_down,
               json.dumps({k: tm.get(k) for k in ("connected", "state", "reconnects")}))
 
+        # ---- 持续断网：保持服务端不可用约 75s，验证退避增长到上限且「永不放弃」----
+        # 任务要求「确保持续断网超过 5 分钟后仍能自动恢复」。5 分钟全量验证会让测试过长，
+        # 这里用 75s 覆盖同一机制：退避已翻倍到 30s 上限、连续失败持续累加、
+        # 重连尝试不因失败次数而终止（实现中没有最大重试次数分支）。
+        fails_at_kill = tm.get("consecutive_fails", 0)
+        rec_at_kill = tm.get("reconnects", 0)
+        time.sleep(75)
+        with open(rt) as f:
+            tm_long = json.load(f)
+        check("持续断网 75s 期间设备端持续重试（连续失败数与重连次数均增长）",
+              tm_long.get("consecutive_fails", 0) > fails_at_kill
+              and tm_long.get("reconnects", 0) > rec_at_kill,
+              f"fails {fails_at_kill}->{tm_long.get('consecutive_fails')} "
+              f"reconnects {rec_at_kill}->{tm_long.get('reconnects')}")
+        check("持续断网期间状态为 reconnecting 且未连接",
+              tm_long.get("state") == "reconnecting" and tm_long.get("connected") is False,
+              f"{tm_long.get('state')} connected={tm_long.get('connected')}")
+        check("持续断网期间运行态仍持续刷新（watchdog 不会误判卡死）",
+              abs(int(time.time()) - int(tm_long.get("updated_at", 0))) < 45,
+              f"age={int(time.time()) - int(tm_long.get('updated_at', 0))}s")
+        check("持续断网期间记录了可诊断的最后错误",
+              bool(tm_long.get("last_error")), str(tm_long.get("last_error"))[:80])
+
         srv = subprocess.Popen(["node", TUNNEL_SRV], env={**env, "TUNNEL_CONFIG": srv_cfg_path},
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                cwd=os.path.dirname(TUNNEL_SRV))
         check("隧道服务端已重启", wait_port("127.0.0.1", SRV_PORT))
         recovered = False
         t_rec = time.time()
-        for _ in range(90):
+        for _ in range(160):
             with open(rt) as f:
                 tm = json.load(f)
             if tm.get("connected"):
@@ -382,8 +412,9 @@ def main():
                 break
             time.sleep(0.5)
         recover_sec = time.time() - t_rec
-        check(f"设备端自动重连成功（耗时 {recover_sec:.1f}s ≤ 30s 验收线）",
-              recovered and recover_sec <= 30, f"{recover_sec:.1f}s")
+        # 恢复时可能正处于最长 30s 的退避等待中，验收线取「退避上限 + 握手余量」
+        check(f"长期断网后自动重连成功（耗时 {recover_sec:.1f}s ≤ 35s）",
+              recovered and recover_sec <= 35, f"{recover_sec:.1f}s")
         check("重连次数被累计",
               tm.get("reconnects", 0) > reconnects_before,
               f"{reconnects_before} -> {tm.get('reconnects')}")
